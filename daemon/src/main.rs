@@ -87,6 +87,8 @@ impl App {
         for a in &mut self.accounts {
             if a.limits.configured() {
                 a.limits.refresh().await;
+            } else {
+                a.limits.forget(); // signed out: a later sign-in starts from scratch
             }
         }
     }
@@ -103,29 +105,38 @@ impl App {
             .iter()
             // Only accounts the user actually has: signed in, or with usage on record.
             .filter(|a| a.limits.configured() || self.store.has(a.account))
-            .map(|a| {
-                let l = &a.limits;
-                let (status, error) = if l.configured() {
-                    (l.status, l.error.clone())
-                } else {
-                    (model::Status::Ok, None) // usage from other tools only; no bars to show
-                };
-                ProviderSnapshot {
-                    id: a.id.into(),
-                    name: a.name.into(),
-                    plan: l.plan.clone(),
-                    status,
-                    error,
-                    limits_updated_at: l.updated_at,
-                    limits: l.windows.clone(),
-                    limit_reached: l.limit_reached,
-                    breakdown: l.breakdown.clone(),
-                    stats: self.store.stats(a.account, now, &self.pricing),
-                    hourly: self.store.hourly(a.account, now, &self.pricing),
-                }
-            })
+            .map(|a| self.account_snapshot(a, now))
             .collect();
         Snapshot { version: SCHEMA_VERSION, updated_at: now, providers }
+    }
+
+    fn account_snapshot(&self, a: &AccountState, now: chrono::DateTime<Utc>) -> ProviderSnapshot {
+        let mut snap = ProviderSnapshot {
+            id: a.id.into(),
+            name: a.name.into(),
+            plan: None,
+            // Usage from other tools only: nothing live to be stale about.
+            status: model::Status::Ok,
+            error: None,
+            limits_updated_at: None,
+            limits: Vec::new(),
+            limit_reached: false,
+            breakdown: Vec::new(),
+            stats: self.store.stats(a.account, now, &self.pricing),
+            hourly: self.store.hourly(a.account, now, &self.pricing),
+        };
+        // Quota data is only shown while signed in; credentials may vanish between polls.
+        let l = &a.limits;
+        if l.configured() {
+            snap.plan = l.plan.clone();
+            snap.status = l.status;
+            snap.error = l.error.clone();
+            snap.limits_updated_at = l.updated_at;
+            snap.limits = l.windows.clone();
+            snap.limit_reached = l.limit_reached;
+            snap.breakdown = l.breakdown.clone();
+        }
+        snap
     }
 
     fn watch_paths(&self) -> Vec<(PathBuf, bool)> {
@@ -258,5 +269,64 @@ impl Watch {
             }
             false
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{LimitWindow, Status};
+
+    #[test]
+    fn signing_out_drops_quota_but_keeps_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = dir.path().join(".credentials.json");
+        std::fs::write(&creds, r#"{"claudeAiOauth":{"accessToken":"t"}}"#).unwrap();
+        let mut limits = Limits::new(Box::new(ClaudeApi::new(dir.path().to_owned())), Limits::http_client().unwrap());
+        // As after a successful fetch.
+        limits.status = Status::Ok;
+        limits.error = None;
+        limits.plan = Some("pro".into());
+        limits.updated_at = Some(Utc::now());
+        limits.limit_reached = true;
+        limits.windows = vec![LimitWindow {
+            id: "session".into(),
+            label: "5-hour".into(),
+            used_pct: 100.0,
+            severity: None,
+            resets_at: None,
+            is_active: true,
+        }];
+        let mut store = UsageStore::default();
+        store.upsert(
+            "k".into(),
+            usage::UsageRecord {
+                ts: Utc::now(),
+                account: Account::Claude,
+                tool: "Claude Code",
+                model: "claude-opus-5-5".into(),
+                session: "s".into(),
+                tokens: model::Tokens { input: 10, ..Default::default() },
+                fast: false,
+            },
+        );
+        let account = AccountState { account: Account::Claude, id: "claude", name: "Claude", limits };
+        let mut app = App { pricing: Pricing::default(), store, sources: Vec::new(), accounts: vec![account] };
+
+        let p = &app.snapshot().providers[0];
+        assert_eq!((p.limits.len(), p.plan.as_deref(), p.limit_reached), (1, Some("pro"), true));
+
+        std::fs::remove_file(&creds).unwrap();
+        let p = &app.snapshot().providers[0];
+        assert!(p.limits.is_empty() && p.plan.is_none() && !p.limit_reached && p.limits_updated_at.is_none());
+        assert_eq!((p.status, p.stats["1d"].input), (Status::Ok, 10));
+
+        // Signing in again doesn't resurrect the old data.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(app.refresh_limits());
+        std::fs::write(&creds, r#"{"claudeAiOauth":{"accessToken":"t"}}"#).unwrap();
+        let p = &app.snapshot().providers[0];
+        assert!(p.limits.is_empty() && p.plan.is_none());
+        assert_eq!(p.status, Status::Stale);
     }
 }

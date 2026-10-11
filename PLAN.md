@@ -151,6 +151,12 @@ agent-bar/
 - pi and opencode sign in to ChatGPT with a separate token-sharing login; their usage counts
   toward the stats but the bars only reflect what `wham/usage` reports for Codex's login.
 - Codex rollouts also carry `token_usage_record` lines (same numbers as `token_count`); ignored.
+- Subscription vs API-key attribution: Codex events are classified one by one
+  (`rate_limits.plan_type`), opencode rows by `cost == 0`. pi and Claude Code logs carry no
+  sign-in evidence, so pi uses its *current* `auth.json` (switching a provider between OAuth
+  and an API key reclassifies its history) and Claude Code usage is always counted as Claude.
+- Log tailing re-reads a file from the start when its inode changes, it shrinks, or its
+  first 256 bytes change; record keys make re-reading the same content harmless.
 - Pricing table in `pricing.rs` is from the official docs as of 2026-10-06; refresh it when
   models launch (unknown models fall back to their family's current price). Labelled “est.”.
 - Ranges are rolling (last 24 h / 7 d / 30 d), not calendar days.

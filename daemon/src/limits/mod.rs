@@ -99,6 +99,17 @@ impl Limits {
         self.api.configured()
     }
 
+    /// Drops fetched data, e.g. after sign-out; request throttling is kept.
+    pub fn forget(&mut self) {
+        self.status = Status::Stale;
+        self.error = Some("not fetched yet".into());
+        self.plan = None;
+        self.updated_at = None;
+        self.windows.clear();
+        self.breakdown.clear();
+        self.limit_reached = false;
+    }
+
     pub async fn refresh(&mut self) {
         let now = Instant::now();
         if self.backoff_until.is_some_and(|t| now < t) || self.last_attempt.is_some_and(|t| now - t < MIN_INTERVAL) {
@@ -197,6 +208,166 @@ fn endpoint(default: &str, env: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const OK_BODY: &str = include_str!("../../tests/fixtures/chatgpt_wham_usage.json");
+
+    /// Local HTTP server answering each request with the next scripted response.
+    struct Server {
+        url: String,
+        hits: Arc<AtomicUsize>,
+        script: Arc<Mutex<VecDeque<String>>>,
+    }
+
+    impl Server {
+        async fn start() -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/usage", listener.local_addr().unwrap());
+            let hits = Arc::new(AtomicUsize::new(0));
+            let script: Arc<Mutex<VecDeque<String>>> = Arc::default();
+            let (h, sc) = (hits.clone(), script.clone());
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = listener.accept().await {
+                    let mut req = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => req.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    h.fetch_add(1, Ordering::SeqCst);
+                    let resp = sc.lock().unwrap().pop_front().unwrap_or_default();
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                }
+            });
+            Self { url, hits, script }
+        }
+
+        fn respond(&self, status: &str, headers: &str, body: &str) {
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+                body.len()
+            );
+            self.script.lock().unwrap().push_back(resp);
+        }
+
+        fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
+    }
+
+    struct TestApi {
+        url: String,
+    }
+
+    impl LimitApi for TestApi {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+        fn configured(&self) -> bool {
+            true
+        }
+        fn request(&self, http: &reqwest::Client) -> Result<(reqwest::RequestBuilder, Option<String>), NotReady> {
+            if self.url.is_empty() {
+                return Err(NotReady { status: Status::Stale, message: "token expired".into() });
+            }
+            Ok((http.get(&self.url), None))
+        }
+        fn parse(&self, body: &str) -> anyhow::Result<Parsed> {
+            chatgpt::parse_usage(body)
+        }
+        fn rejected_hint(&self) -> &'static str {
+            "sign in again"
+        }
+    }
+
+    /// Pretend the request floor and any backoff have elapsed.
+    fn let_time_pass(l: &mut Limits) {
+        l.last_attempt = None;
+        l.backoff_until = None;
+    }
+
+    #[tokio::test]
+    async fn request_policy_and_error_handling() {
+        let srv = Server::start().await;
+        let mut l = Limits::new(Box::new(TestApi { url: srv.url.clone() }), Limits::http_client().unwrap());
+
+        srv.respond("200 OK", "", OK_BODY);
+        l.refresh().await;
+        assert_eq!((l.status, l.windows.len(), l.plan.as_deref(), srv.hits()), (Status::Ok, 2, Some("plus"), 1));
+        let fetched = l.updated_at;
+
+        // At most one request per minute, manual refreshes included.
+        l.refresh().await;
+        assert_eq!(srv.hits(), 1);
+
+        // 429: stale, last-known windows kept, Retry-After lengthens the wait.
+        l.last_attempt = None;
+        srv.respond("429 Too Many Requests", "Retry-After: 300\r\n", "");
+        l.refresh().await;
+        assert_eq!((l.status, l.windows.len(), l.updated_at), (Status::Stale, 2, fetched));
+        let wait = l.backoff_until.unwrap() - Instant::now();
+        assert!(wait > Duration::from_secs(290) && wait <= Duration::from_secs(300));
+        // Still backing off even once the per-minute floor has passed.
+        l.last_attempt = None;
+        l.refresh().await;
+        assert_eq!(srv.hits(), 2);
+
+        // 5xx: also backs off, now for longer.
+        let_time_pass(&mut l);
+        srv.respond("503 Service Unavailable", "", "");
+        l.refresh().await;
+        assert_eq!((l.status, l.windows.len(), srv.hits()), (Status::Stale, 2, 3));
+        assert!(l.backoff_until.unwrap() - Instant::now() > Duration::from_secs(110));
+
+        // 401: stale with the sign-in hint, no backoff.
+        let_time_pass(&mut l);
+        srv.respond("401 Unauthorized", "", "");
+        l.refresh().await;
+        assert_eq!((l.status, l.error.as_deref(), l.windows.len()), (Status::Stale, Some("sign in again"), 2));
+        assert!(l.backoff_until.is_none());
+
+        // Other 4xx and malformed bodies: errors, data kept.
+        let_time_pass(&mut l);
+        srv.respond("404 Not Found", "", "");
+        l.refresh().await;
+        assert_eq!((l.status, l.windows.len()), (Status::Error, 2));
+        let_time_pass(&mut l);
+        srv.respond("200 OK", "", r#"{"rate_limit":{}}"#);
+        l.refresh().await;
+        assert_eq!((l.status, l.windows.len()), (Status::Error, 2));
+        assert!(l.error.as_deref().unwrap().starts_with("unexpected response"));
+
+        // Recovery clears the error and resets the backoff.
+        let_time_pass(&mut l);
+        srv.respond("200 OK", "", OK_BODY);
+        l.refresh().await;
+        assert_eq!((l.status, l.error.as_deref(), l.backoff, srv.hits()), (Status::Ok, None, MIN_BACKOFF, 7));
+        assert!(l.updated_at > fetched);
+    }
+
+    #[tokio::test]
+    async fn no_request_without_usable_credentials() {
+        let mut l = Limits::new(Box::new(TestApi { url: String::new() }), Limits::http_client().unwrap());
+        l.refresh().await;
+        assert_eq!((l.status, l.error.as_deref()), (Status::Stale, Some("token expired")));
+    }
+
+    #[tokio::test]
+    async fn network_failure_backs_off() {
+        // Nothing listens on a port we just released.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let api = TestApi { url: format!("http://127.0.0.1:{port}/usage") };
+        let mut l = Limits::new(Box::new(api), Limits::http_client().unwrap());
+        l.refresh().await;
+        assert_eq!(l.status, Status::Stale);
+        assert!(l.error.as_deref().unwrap().starts_with("request failed"));
+        assert!(l.backoff_until.is_some());
+    }
 
     #[test]
     fn backoff_grows_despite_short_retry_after() {

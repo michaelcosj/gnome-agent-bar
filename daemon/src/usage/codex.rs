@@ -4,9 +4,14 @@
 //! `event_msg` with `payload.type == "token_count"` carries cumulative
 //! `info.total_token_usage` for the session. We record the delta between
 //! consecutive totals (repeated totals are skipped), keyed by the running total so
-//! re-reads are idempotent. OpenAI's `input_tokens` includes cached tokens.
+//! re-reads are idempotent. A total that goes down starts a new counter; the key then
+//! carries a reset count so its totals can't collide with earlier ones. OpenAI's
+//! `input_tokens` includes cached tokens.
 //!
-//! Only counted when Codex is signed in with ChatGPT (subscription), not an API key.
+//! Only ChatGPT (subscription) usage is counted, not API-key usage. In current Codex
+//! each `token_count` carries `rate_limits.plan_type` when signed in with ChatGPT, so
+//! history is classified by how it was made, not by the current sign-in. Older logs
+//! without the field fall back to the current `auth.json`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,7 +19,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use super::tail::{JsonlTail, contains};
+use super::tail::{Event, JsonlTail, contains};
 use super::{Account, UsageRecord, UsageSource, UsageStore};
 use crate::model::Tokens;
 
@@ -30,6 +35,10 @@ pub struct CodexLogs {
 struct FileState {
     model: Option<String>,
     last: Option<RawUsage>,
+    /// Times the cumulative total went down in this file.
+    resets: u32,
+    /// A `token_count` in this file showed a ChatGPT plan.
+    chatgpt: bool,
 }
 
 impl CodexLogs {
@@ -60,14 +69,17 @@ impl CodexLogs {
 
 impl UsageSource for CodexLogs {
     fn scan(&mut self, store: &mut UsageStore, now: DateTime<Utc>) {
-        if !self.uses_chatgpt() {
-            return;
-        }
+        let signed_in = self.uses_chatgpt();
         let files = &mut self.files;
-        self.tail.scan(now, |path, line| {
-            let state = files.entry(path.to_owned()).or_default();
-            if let Some((key, rec)) = parse_line(path, line, state) {
-                store.upsert(key, rec);
+        self.tail.scan_events(now, |ev| match ev {
+            Event::Reset(path) => {
+                files.remove(path);
+            }
+            Event::Line(path, line) => {
+                let state = files.entry(path.to_owned()).or_default();
+                if let Some((key, rec)) = parse_line(path, line, state, signed_in) {
+                    store.upsert(key, rec);
+                }
             }
         });
         files.retain(|p, _| p.exists());
@@ -78,7 +90,8 @@ impl UsageSource for CodexLogs {
     }
 }
 
-fn parse_line(path: &Path, line: &[u8], state: &mut FileState) -> Option<(String, UsageRecord)> {
+/// `signed_in`: Codex currently uses ChatGPT; only consulted for logs without `rate_limits`.
+fn parse_line(path: &Path, line: &[u8], state: &mut FileState, signed_in: bool) -> Option<(String, UsageRecord)> {
     if !contains(line, b"turn_context") && !contains(line, b"token_count") {
         return None;
     }
@@ -89,10 +102,22 @@ fn parse_line(path: &Path, line: &[u8], state: &mut FileState) -> Option<(String
             None
         }
         "event_msg" if l.payload.kind.as_deref() == Some("token_count") => {
+            let subscription = match &l.payload.rate_limits {
+                Some(Some(rl)) if rl.plan_type.is_some() => {
+                    state.chatgpt = true;
+                    true
+                }
+                Some(_) => state.chatgpt, // field present but no plan: API key, unless shown earlier
+                None => signed_in,        // older Codex: no per-event evidence
+            };
             let total = l.payload.info?.total_token_usage;
-            let prev = state.last.replace(total).unwrap_or_default();
-            if total.total_tokens <= prev.total_tokens {
-                return None; // repeated snapshot or a reset
+            let mut prev = state.last.replace(total).unwrap_or_default();
+            if total.total_tokens < prev.total_tokens {
+                state.resets += 1; // new counter (e.g. a restarted session) starts from zero
+                prev = RawUsage::default();
+            }
+            if total.total_tokens <= prev.total_tokens || !subscription {
+                return None; // repeated snapshot, or not subscription usage
             }
             let d = total.minus(&prev);
             let cached = d.cached_input_tokens.min(d.input_tokens);
@@ -111,7 +136,7 @@ fn parse_line(path: &Path, line: &[u8], state: &mut FileState) -> Option<(String
                 },
                 fast: false,
             };
-            Some((format!("codex:{}:{}", path.display(), total.total_tokens), rec))
+            Some((format!("codex:{}:{}:{}", path.display(), state.resets, total.total_tokens), rec))
         }
         _ => None,
     }
@@ -131,6 +156,19 @@ struct Payload {
     kind: Option<String>,
     model: Option<String>,
     info: Option<Info>,
+    /// Missing (older Codex) vs null vs present.
+    #[serde(default, deserialize_with = "present")]
+    rate_limits: Option<Option<RateLimits>>,
+}
+
+#[derive(Deserialize)]
+struct RateLimits {
+    plan_type: Option<String>,
+}
+
+/// Lets `Option<Option<T>>` tell a missing field (None) from null (Some(None)).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -166,11 +204,80 @@ mod tests {
     use super::*;
     use crate::pricing::Pricing;
 
+    /// Older Codex format: no `rate_limits` field.
     fn token_count(ts: &str, input: u64, cached: u64, output: u64) -> String {
+        token_count_with(ts, input, cached, output, "")
+    }
+
+    /// `rate_limits`: a JSON value to include, or "" to omit the field.
+    fn token_count_with(ts: &str, input: u64, cached: u64, output: u64, rate_limits: &str) -> String {
+        let rl = if rate_limits.is_empty() { String::new() } else { format!(r#","rate_limits":{rate_limits}"#) };
         format!(
-            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output},"reasoning_output_tokens":0,"total_tokens":{}}},"last_token_usage":{{}},"model_context_window":272000}},"rate_limits":null}}}}"#,
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output},"reasoning_output_tokens":0,"total_tokens":{}}},"last_token_usage":{{}},"model_context_window":272000}}{rl}}}}}"#,
             input + output
         ) + "\n"
+    }
+
+    const PLUS: &str = r#"{"limit_id":"codex","plan_type":"plus","primary":null}"#;
+
+    fn write_session(home: &Path, lines: &[String]) {
+        let day = home.join("sessions/2026/10/11");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(day.join("rollout-2026-10-11T10-00-00-x.jsonl"), lines.concat()).unwrap();
+    }
+
+    #[test]
+    fn counts_again_after_counter_reset() {
+        let now: DateTime<Utc> = "2026-10-11T12:00:00Z".parse().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Totals 100 -> 200 -> 0 -> 100 -> 100: three requests of 100 tokens each.
+        write_session(
+            home.path(),
+            &[
+                token_count_with("2026-10-11T10:00:01Z", 90, 0, 10, PLUS),
+                token_count_with("2026-10-11T10:00:02Z", 180, 0, 20, PLUS),
+                token_count_with("2026-10-11T10:00:03Z", 0, 0, 0, PLUS),
+                token_count_with("2026-10-11T10:00:04Z", 90, 0, 10, PLUS),
+                token_count_with("2026-10-11T10:00:05Z", 90, 0, 10, PLUS),
+            ],
+        );
+        let mut store = UsageStore::default();
+        let mut codex = CodexLogs::new(home.path().to_owned());
+        codex.scan(&mut store, now);
+        let s = &store.stats(Account::ChatGpt, now, &Pricing::default())["1d"];
+        assert_eq!((s.requests, s.total_tokens), (3, 300));
+
+        // Rewriting the file with the same content is a reset, not new usage.
+        let path = home.path().join("sessions/2026/10/11/rollout-2026-10-11T10-00-00-x.jsonl");
+        let content = std::fs::read(&path).unwrap();
+        std::fs::write(path.with_extension("tmp"), &content).unwrap();
+        std::fs::rename(path.with_extension("tmp"), &path).unwrap();
+        codex.scan(&mut store, now);
+        let s = &store.stats(Account::ChatGpt, now, &Pricing::default())["1d"];
+        assert_eq!((s.requests, s.total_tokens), (3, 300));
+    }
+
+    #[test]
+    fn classifies_each_event_by_its_own_plan() {
+        let now: DateTime<Utc> = "2026-10-11T12:00:00Z".parse().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Signed out now (no auth.json), yet past ChatGPT usage still counts;
+        // events made with an API key (rate_limits null) don't.
+        write_session(
+            home.path(),
+            &[
+                token_count_with("2026-10-11T10:00:01Z", 90, 0, 10, "null"),
+                token_count_with("2026-10-11T10:00:02Z", 180, 0, 20, PLUS),
+                token_count_with("2026-10-11T10:00:03Z", 270, 0, 30, "null"), // same session: still ChatGPT
+            ],
+        );
+        let api_key = home.path().join("sessions/2026/10/11/rollout-api.jsonl");
+        std::fs::write(&api_key, token_count_with("2026-10-11T10:00:01Z", 900, 0, 100, "null")).unwrap();
+
+        let mut store = UsageStore::default();
+        CodexLogs::new(home.path().to_owned()).scan(&mut store, now);
+        let s = &store.stats(Account::ChatGpt, now, &Pricing::default())["1d"];
+        assert_eq!((s.requests, s.total_tokens), (2, 200));
     }
 
     #[test]
@@ -205,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_api_key_mode() {
+    fn older_logs_use_current_sign_in() {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join("auth.json"), r#"{"auth_mode":"apikey"}"#).unwrap();
         let day = home.path().join("sessions");
