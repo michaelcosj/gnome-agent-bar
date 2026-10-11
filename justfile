@@ -51,6 +51,8 @@ install: pack
         echo "Stop the dev daemon (just run-daemon / devkit) first: it holds the bus name."; exit 1; fi
     {{cargo}} install --quiet --locked --path daemon --root "$HOME/.local"
     install -Dm644 packaging/agent-bar.service "{{unit_dir}}/agent-bar.service"
+    @# Example config only if none exists, so edits survive reinstalls.
+    @[ -e "$HOME/.config/agent-bar/config.toml" ] || install -Dm644 packaging/config.example.toml "$HOME/.config/agent-bar/config.toml"
     systemctl --user daemon-reload
     systemctl --user enable agent-bar.service
     systemctl --user restart agent-bar.service

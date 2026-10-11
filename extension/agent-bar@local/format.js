@@ -86,6 +86,20 @@ export function pickLimit(limits, preferred) {
     return chosen || limits.reduce((a, b) => (b.used_pct > a.used_pct ? b : a));
 }
 
+// Local clock hour for an ISO timestamp: "14:00".
+export function hourLabel(iso) {
+    return `${String(new Date(Date.parse(iso)).getHours()).padStart(2, '0')}:00`;
+}
+
+// Default caption for the hourly chart, or null when there's no usage.
+export function hourlySummary(buckets) {
+    const total = (buckets ?? []).reduce((sum, b) => sum + b.cost_usd, 0);
+    if (!(total > 0))
+        return null;
+    const peak = buckets.reduce((a, b) => (b.cost_usd > a.cost_usd ? b : a));
+    return {total: cost(total), peak: `peak ${cost(peak.cost_usd)} at ${hourLabel(peak.start)}`};
+}
+
 export function shortModel(model) {
     return model.replace(/^claude-/, '');
 }

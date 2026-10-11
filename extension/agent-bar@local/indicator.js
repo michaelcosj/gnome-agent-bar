@@ -2,6 +2,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Pango from 'gi://Pango';
 import St from 'gi://St';
 
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -61,6 +62,83 @@ class AgentBarMeter extends St.DrawingArea {
         cr.$dispose();
     }
 });
+
+// Hourly bars, oldest → newest; the last (current, partial) hour is drawn fainter.
+// Color comes from CSS; hovering reports the bar index (-1 on leave).
+const HourlyChart = GObject.registerClass(
+class AgentBarHourlyChart extends St.DrawingArea {
+    _init(buckets, onHover) {
+        super._init({style_class: 'agent-bar-chart', reactive: true, x_expand: true});
+        this._buckets = buckets;
+        this._onHover = onHover;
+        this._hover = -1;
+    }
+
+    _slotAt(x) {
+        const [, lx] = this.transform_stage_point(x, 0);
+        const n = this._buckets.length;
+        return Math.min(n - 1, Math.max(0, Math.floor(lx / (this.width / n))));
+    }
+
+    vfunc_motion_event(event) {
+        const i = this._slotAt(event.get_coords()[0]);
+        if (i !== this._hover) {
+            this._hover = i;
+            this._onHover(i);
+            this.queue_repaint();
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    vfunc_leave_event(event) {
+        this._hover = -1;
+        this._onHover(-1);
+        this.queue_repaint();
+        return super.vfunc_leave_event(event);
+    }
+
+    vfunc_repaint() {
+        const cr = this.get_context();
+        const [w, h] = this.get_surface_size();
+        const c = this.get_theme_node().get_foreground_color();
+        const [r, g, b] = [c.red / 255, c.green / 255, c.blue / 255];
+        const n = this._buckets.length;
+        const gap = 2;
+        const bw = (w - gap * (n - 1)) / n;
+        const max = Math.max(...this._buckets.map(x => x.cost_usd));
+
+        // Recessive baseline.
+        cr.setSourceRGBA(r, g, b, 0.25);
+        cr.rectangle(0, h - 1, w, 1);
+        cr.fill();
+
+        this._buckets.forEach((bucket, i) => {
+            if (!(max > 0) || bucket.cost_usd <= 0)
+                return;
+            const bh = Math.max(2, (h - 1) * bucket.cost_usd / max);
+            const x = i * (bw + gap);
+            const current = i === n - 1;
+            const dimmed = this._hover >= 0 && i !== this._hover;
+            cr.setSourceRGBA(r, g, b, dimmed ? 0.35 : current ? 0.6 : 1);
+            topRoundedBar(cr, x, h - 1 - bh, bw, bh, Math.min(4, bw / 2));
+            cr.fill();
+        });
+        cr.$dispose();
+    }
+});
+
+// Bar with rounded data-end (top), square at the baseline.
+function topRoundedBar(cr, x, y, w, h, rad) {
+    rad = Math.min(rad, h);
+    cr.newSubPath();
+    cr.moveTo(x, y + h);
+    cr.lineTo(x, y + rad);
+    cr.arc(x + rad, y + rad, rad, Math.PI, 3 * Math.PI / 2);
+    cr.lineTo(x + w - rad, y);
+    cr.arc(x + w - rad, y + rad, rad, 3 * Math.PI / 2, 2 * Math.PI);
+    cr.lineTo(x + w, y + h);
+    cr.closePath();
+}
 
 function setLevel(actor, lvl) {
     for (const l of LEVELS)
@@ -224,19 +302,21 @@ class AgentBarIndicator extends PanelMenu.Button {
         for (const p of providers)
             this._renderProvider(p);
 
-        const p = providers[0];
-        this._footer.label.text = p.status === 'ok' || !p.error
-            ? `Limits updated ${fmt.ago(p.limits_updated_at)}`
-            : `${p.error} · last data ${fmt.ago(p.limits_updated_at)}`;
+        this._footer.label.text = `Limits updated ${fmt.ago(providers[0].limits_updated_at)}`;
     }
 
     _renderProvider(p) {
         const section = this._content;
         const plan = p.plan ? ` · ${p.plan[0].toUpperCase()}${p.plan.slice(1)}` : '';
         this._heading(section, `${p.name}${plan}`, p.status !== 'ok' ? p.status : null);
+        if (p.status !== 'ok' && p.error)
+            this._wrappedRow(section, p.error, 'agent-bar-error');
 
         for (const limit of p.limits)
             this._limitItem(section, limit);
+
+        if (p.hourly?.length)
+            this._hourlyChart(section, p.hourly);
 
         // Usage stats for the selected range.
         section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -288,6 +368,37 @@ class AgentBarIndicator extends PanelMenu.Button {
         section.addMenuItem(item);
     }
 
+    _hourlyChart(section, buckets) {
+        section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Last 24 hours · est. cost'));
+        const summary = fmt.hourlySummary(buckets);
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const col = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
+        const caption = new St.BoxLayout({x_expand: true});
+        const left = new St.Label({x_expand: true, style_class: 'agent-bar-dim', opacity: DIM_OPACITY});
+        const right = new St.Label({style_class: 'agent-bar-value'});
+        caption.add_child(left);
+        caption.add_child(right);
+
+        const showDefault = () => {
+            left.text = summary?.peak ?? 'No usage in the last 24 hours';
+            right.text = summary?.total ?? '';
+        };
+        const chart = new HourlyChart(buckets, i => {
+            if (i < 0)
+                return showDefault();
+            const b = buckets[i];
+            const now = i === buckets.length - 1 ? ' (now)' : '';
+            left.text = `${fmt.hourLabel(b.start)}${now} · ${fmt.tokens(b.total_tokens)} tokens`;
+            right.text = fmt.cost(b.cost_usd);
+        });
+        showDefault();
+
+        col.add_child(chart);
+        col.add_child(caption);
+        item.add_child(col);
+        section.addMenuItem(item);
+    }
+
     _rangeSwitcher(section, current) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         const box = new St.BoxLayout({style_class: 'agent-bar-ranges', x_expand: true});
@@ -299,6 +410,17 @@ class AgentBarIndicator extends PanelMenu.Button {
             box.add_child(btn);
         }
         item.add_child(box);
+        section.addMenuItem(item);
+    }
+
+    // Long text (errors) wraps at the CSS max-width instead of widening the menu.
+    _wrappedRow(section, text, styleClass) {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const label = new St.Label({text, style_class: styleClass, x_expand: true});
+        label.clutter_text.line_wrap = true;
+        label.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+        label.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        item.add_child(label);
         section.addMenuItem(item);
     }
 

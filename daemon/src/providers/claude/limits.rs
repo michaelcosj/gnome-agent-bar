@@ -19,14 +19,17 @@ use tracing::{debug, warn};
 use crate::model::{BreakdownRow, LimitWindow, Status};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// Test-only override so automated tests never hit (and rate-limit) the real endpoint.
+const USAGE_URL_ENV: &str = "AGENT_BAR_USAGE_URL";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
-/// Floor between requests, so manual refreshes can't hammer the endpoint.
-const MIN_INTERVAL: Duration = Duration::from_secs(30);
+/// Hard floor between requests (polls and manual refreshes alike): 1 per minute.
+const MIN_INTERVAL: Duration = Duration::from_secs(60);
 const MIN_BACKOFF: Duration = Duration::from_secs(60);
 const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
 
 pub struct ClaudeLimits {
     config_dir: PathBuf,
+    usage_url: String,
     http: reqwest::Client,
     last_attempt: Option<Instant>,
     backoff: Duration,
@@ -46,8 +49,13 @@ impl ClaudeLimits {
             .user_agent(concat!("agent-bar/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(10))
             .build()?;
+        let usage_url = std::env::var(USAGE_URL_ENV).unwrap_or_else(|_| USAGE_URL.into());
+        if usage_url != USAGE_URL {
+            warn!("using {USAGE_URL_ENV}={usage_url}");
+        }
         Ok(Self {
             config_dir,
+            usage_url,
             http,
             last_attempt: None,
             backoff: MIN_BACKOFF,
@@ -81,7 +89,7 @@ impl ClaudeLimits {
 
         let resp = self
             .http
-            .get(USAGE_URL)
+            .get(&self.usage_url)
             .bearer_auth(&creds.access_token)
             .header("anthropic-beta", OAUTH_BETA)
             .send()
@@ -139,10 +147,16 @@ impl ClaudeLimits {
     }
 
     fn back_off(&mut self, retry_after: Option<Duration>) {
-        let wait = retry_after.unwrap_or(self.backoff).clamp(MIN_BACKOFF, MAX_BACKOFF);
+        let wait = backoff_wait(self.backoff, retry_after);
         self.backoff_until = Some(Instant::now() + wait);
         self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
     }
+}
+
+/// The server's Retry-After can lengthen our exponential backoff but never shorten it,
+/// otherwise a short Retry-After on every 429 would pin retries at the minimum.
+fn backoff_wait(current: Duration, retry_after: Option<Duration>) -> Duration {
+    retry_after.map_or(current, |r| r.max(current)).clamp(MIN_BACKOFF, MAX_BACKOFF)
 }
 
 // No Debug derive: keeps the token out of accidental `{:?}` logging.
@@ -299,6 +313,15 @@ mod tests {
     #[test]
     fn rejects_empty_response() {
         assert!(parse_usage("{}").is_err());
+    }
+
+    #[test]
+    fn backoff_grows_despite_short_retry_after() {
+        let s = Duration::from_secs;
+        assert_eq!(backoff_wait(s(240), Some(s(5))), s(240));
+        assert_eq!(backoff_wait(s(60), Some(s(600))), s(600));
+        assert_eq!(backoff_wait(s(60), None), s(60));
+        assert_eq!(backoff_wait(s(60), Some(s(99_999))), MAX_BACKOFF);
     }
 
     #[test]

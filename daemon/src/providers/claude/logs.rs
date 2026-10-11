@@ -12,14 +12,15 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, DurationRound, Utc};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use crate::model::{ModelUsage, Tokens, UsageStats};
-use crate::pricing;
+use crate::model::{HourBucket, ModelUsage, Tokens, UsageStats};
+use crate::pricing::Pricing;
 
 pub const RANGES: &[(&str, i64)] = &[("1d", 1), ("7d", 7), ("30d", 30)];
+pub const HOURLY_BUCKETS: i64 = 24;
 /// Keep a day beyond the longest range so a range never loses entries mid-scan.
 const RETENTION_DAYS: i64 = 31;
 
@@ -132,21 +133,35 @@ impl LogIndex {
             .or_insert(entry);
     }
 
-    pub fn stats(&self, now: DateTime<Utc>) -> BTreeMap<String, UsageStats> {
+    pub fn stats(&self, now: DateTime<Utc>, pricing: &Pricing) -> BTreeMap<String, UsageStats> {
         RANGES
             .iter()
-            .map(|&(id, days)| (id.to_owned(), self.range_stats(now - Duration::days(days), now)))
+            .map(|&(id, days)| (id.to_owned(), self.range_stats(now - Duration::days(days), now, pricing)))
             .collect()
     }
 
-    fn range_stats(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> UsageStats {
+    pub fn hourly(&self, now: DateTime<Utc>, pricing: &Pricing) -> Vec<HourBucket> {
+        let current = now.duration_trunc(Duration::hours(1)).unwrap_or(now);
+        let first = current - Duration::hours(HOURLY_BUCKETS - 1);
+        let mut buckets: Vec<HourBucket> = (0..HOURLY_BUCKETS)
+            .map(|i| HourBucket { start: first + Duration::hours(i), total_tokens: 0, cost_usd: 0.0 })
+            .collect();
+        for e in self.entries.values().filter(|e| e.ts >= first && e.ts <= now) {
+            let b = &mut buckets[(e.ts - first).num_hours() as usize];
+            b.total_tokens += e.tokens.total();
+            b.cost_usd += pricing.cost_usd(&e.model, &e.tokens, e.fast);
+        }
+        buckets
+    }
+
+    fn range_stats(&self, from: DateTime<Utc>, to: DateTime<Utc>, pricing: &Pricing) -> UsageStats {
         let mut s = UsageStats::default();
         let mut sessions = HashSet::new();
         let mut by_model: HashMap<&str, ModelUsage> = HashMap::new();
 
         for e in self.entries.values().filter(|e| e.ts > from && e.ts <= to) {
             let t = &e.tokens;
-            let cost = pricing::cost_usd(&e.model, t, e.fast);
+            let cost = pricing.cost_usd(&e.model, t, e.fast);
             s.input += t.input;
             s.output += t.output;
             s.cache_read += t.cache_read;
@@ -259,7 +274,7 @@ mod tests {
 
         let mut idx = LogIndex::new(dir.path().to_owned());
         idx.scan(now());
-        let stats = idx.stats(now());
+        let stats = idx.stats(now(), &Pricing::default());
 
         let d1 = &stats["1d"];
         assert_eq!((d1.requests, d1.input, d1.output, d1.cache_write), (1, 10, 168, 1000));
@@ -271,6 +286,15 @@ mod tests {
         assert_eq!(stats["30d"].requests, 3);
         assert_eq!(stats["30d"].sessions, 2);
         assert_eq!(stats["30d"].by_model.len(), 1);
+
+        // now = 12:00 → buckets 13:00 yesterday .. 12:00 today; m1 at 10:00 is index 21.
+        let hourly = idx.hourly(now(), &Pricing::default());
+        assert_eq!(hourly.len(), 24);
+        assert_eq!(hourly[0].start, "2026-10-10T13:00:00Z".parse::<DateTime<Utc>>().unwrap());
+        assert_eq!(hourly[23].start, "2026-10-11T12:00:00Z".parse::<DateTime<Utc>>().unwrap());
+        assert_eq!(hourly[21].total_tokens, 10 + 168 + 1000);
+        assert!((hourly[21].cost_usd - d1.cost_usd).abs() < 1e-12);
+        assert_eq!(hourly.iter().filter(|b| b.total_tokens > 0).count(), 1);
     }
 
     #[test]
@@ -281,7 +305,7 @@ mod tests {
 
         let mut idx = LogIndex::new(dir.path().to_owned());
         idx.scan(now());
-        assert_eq!(idx.stats(now())["1d"].requests, 1);
+        assert_eq!(idx.stats(now(), &Pricing::default())["1d"].requests, 1);
 
         // Half-written line: not consumed yet.
         let full = line("m2", "r2", "2026-10-11T11:00:00Z", "s1", 1, 1);
@@ -289,10 +313,10 @@ mod tests {
         let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(head.as_bytes()).unwrap();
         idx.scan(now());
-        assert_eq!(idx.stats(now())["1d"].requests, 1);
+        assert_eq!(idx.stats(now(), &Pricing::default())["1d"].requests, 1);
 
         f.write_all(tail.as_bytes()).unwrap();
         idx.scan(now());
-        assert_eq!(idx.stats(now())["1d"].requests, 2);
+        assert_eq!(idx.stats(now(), &Pricing::default())["1d"].requests, 2);
     }
 }

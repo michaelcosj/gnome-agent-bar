@@ -2,6 +2,7 @@ mod limits;
 mod logs;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -9,17 +10,20 @@ use chrono::{DateTime, Utc};
 use self::{limits::ClaudeLimits, logs::LogIndex};
 use super::Provider;
 use crate::model::ProviderSnapshot;
+use crate::pricing::Pricing;
 
 pub struct ClaudeProvider {
     limits: ClaudeLimits,
     logs: LogIndex,
+    pricing: Arc<Pricing>,
 }
 
 impl ClaudeProvider {
-    pub fn new(config_dir: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(config_dir: PathBuf, pricing: Arc<Pricing>) -> anyhow::Result<Self> {
         Ok(Self {
             limits: ClaudeLimits::new(config_dir.clone())?,
             logs: LogIndex::new(config_dir.join("projects")),
+            pricing,
         })
     }
 
@@ -57,7 +61,8 @@ impl Provider for ClaudeProvider {
             limits_updated_at: l.updated_at,
             limits: l.windows.clone(),
             breakdown: l.breakdown.clone(),
-            stats: self.logs.stats(now),
+            stats: self.logs.stats(now, &self.pricing),
+            hourly: self.logs.hourly(now, &self.pricing),
         }
     }
 }

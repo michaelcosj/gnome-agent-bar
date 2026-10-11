@@ -38,6 +38,20 @@
 .agent-bar-footer { font-size: 0.9em; }
 .agent-bar-value { font-feature-settings: "tnum"; }
 
+/* Normal ink: the status badge next to the heading carries the warning. */
+.agent-bar-error {
+    max-width: 240px; /* = limit bar min-width, so errors never widen the menu */
+    font-size: 0.9em;
+}
+
+/* 24h chart: single series in the accent color; text stays in normal ink. */
+.agent-bar-chart {
+    height: 40px;
+    min-width: 240px;
+    margin: 4px 0 2px;
+    color: -st-accent-color;
+}
+
 .agent-bar-ranges { spacing: 4px; }
 .agent-bar-range {
     padding: 2px 8px;

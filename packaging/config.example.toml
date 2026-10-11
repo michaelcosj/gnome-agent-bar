@@ -1,0 +1,18 @@
+# agent-bar daemon config: ~/.config/agent-bar/config.toml
+# Everything is optional; commented values are the defaults.
+# Apply changes with: systemctl --user restart agent-bar
+
+# Seconds between subscription-limit polls (minimum 60).
+#limits_interval_secs = 180
+
+# Seconds between log rescans; file changes trigger a rescan sooner (minimum 10).
+#stats_interval_secs = 60
+
+# Price overrides in USD per million tokens, keyed by model-id prefix (longest
+# prefix wins). Omitted fields keep the built-in price. Cache writes are derived
+# from input (5 min = 1.25x, 1 h = 2x). Costs are API-equivalent estimates.
+#
+#[pricing."claude-opus-5-5"]
+#input = 4.0
+#output = 20.0
+#cache_read = 0.20

@@ -37,3 +37,15 @@ eq(dueAlerts(prov(90), T, fresh).length, 0);
 eq(dueAlerts(undefined, T, new Set()).length, 0);
 
 print('extension unit tests: all passed');
+
+// Hourly chart caption.
+eq(f.hourlySummary([{cost_usd: 0, start: '2026-10-11T10:00:00Z'}]), null);
+eq(f.hourlySummary(undefined), null);
+const hs = f.hourlySummary([
+    {cost_usd: 1.5, start: '2026-10-11T10:00:00Z'},
+    {cost_usd: 3.25, start: '2026-10-11T11:00:00Z'},
+]);
+eq(hs.total, '$4.75');
+eq(hs.peak, `peak $3.25 at ${f.hourLabel('2026-10-11T11:00:00Z')}`);
+eq(/^\d\d:00$/.test(f.hourLabel('2026-10-11T11:00:00Z')), true);
+print('hourly chart tests: all passed');

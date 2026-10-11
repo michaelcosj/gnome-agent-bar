@@ -1,3 +1,4 @@
+mod config;
 mod dbus;
 mod model;
 mod pricing;
@@ -13,12 +14,11 @@ use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tracing::{info, warn};
 
+use crate::config::Config;
 use crate::model::{SCHEMA_VERSION, Snapshot};
+use crate::pricing::Pricing;
 use crate::providers::{Provider, claude::ClaudeProvider};
 
-const LIMITS_INTERVAL: Duration = Duration::from_secs(180);
-/// Re-evaluates rolling ranges and catches changes the watcher missed.
-const STATS_INTERVAL: Duration = Duration::from_secs(60);
 /// Coalesces bursts of log writes into one rescan.
 const FS_DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -31,8 +31,10 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
+    let config = Config::load();
+    let pricing = Arc::new(Pricing::new(&config.pricing));
     let claude_dir = ClaudeProvider::default_config_dir().context("cannot locate Claude config dir")?;
-    let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(ClaudeProvider::new(claude_dir)?)];
+    let mut providers: Vec<Box<dyn Provider>> = vec![Box::new(ClaudeProvider::new(claude_dir, pricing)?)];
 
     if std::env::args().any(|a| a == "--print") {
         refresh_all(&mut providers).await;
@@ -52,8 +54,9 @@ async fn main() -> anyhow::Result<()> {
         .context("cannot register on the session bus (already running?)")?;
     info!("serving {} on the session bus", dbus::BUS_NAME);
 
-    let mut limits_tick = interval(LIMITS_INTERVAL);
-    let mut stats_tick = interval(STATS_INTERVAL);
+    let mut limits_tick = interval(config.limits_interval());
+    // Re-evaluates rolling ranges and catches changes the watcher missed.
+    let mut stats_tick = interval(config.stats_interval());
     for t in [&mut limits_tick, &mut stats_tick] {
         t.set_missed_tick_behavior(MissedTickBehavior::Delay);
         t.reset(); // initial refresh already done

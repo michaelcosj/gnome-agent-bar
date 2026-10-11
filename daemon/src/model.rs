@@ -35,6 +35,15 @@ pub struct ProviderSnapshot {
     pub breakdown: Vec<BreakdownRow>,
     /// Keyed by range id: "1d", "7d", "30d" (rolling windows ending now).
     pub stats: BTreeMap<String, UsageStats>,
+    /// Last 24 clock hours, oldest first; the last bucket is the current (partial) hour.
+    pub hourly: Vec<HourBucket>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HourBucket {
+    pub start: DateTime<Utc>,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

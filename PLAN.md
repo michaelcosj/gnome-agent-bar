@@ -124,7 +124,8 @@ agent-bar/
    optional D-Bus activation.
 5. **Polish** ✅ partly (2026-10-11) — Adw prefs (left/used, countdown, top-bar limit,
    notification thresholds), low-quota notifications (once per window), Settings menu item.
-   Remaining: poll interval / pricing overrides (daemon config), 24 h sparkline. Was: Adw prefs (panel label choice, poll interval, compact mode, hidden providers),
+   Then: ~/.config/agent-bar/config.toml (intervals, price overrides), 24 h hourly cost
+   chart with hover, wrapped errors, 1 req/min floor + fixed backoff, offline headless test. Was: Adw prefs (panel label choice, poll interval, compact mode, hidden providers),
    threshold notifications (once per window per reset), 24 h sparkline.
 6. **Codex provider** — `~/.codex/sessions/**` `token_count` events (rate limits + tokens).
 

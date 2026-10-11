@@ -4,7 +4,13 @@
 //! Rates are first-party list prices in USD per million tokens (source: Anthropic
 //! pricing docs, as of 2026-10-06). Cache writes are 1.25x input (5 min TTL) and
 //! 2x input (1 h TTL) on every model; cache reads vary per model.
+//!
+//! Config overrides (`[pricing."<model prefix>"]`) replace the matching model's base
+//! rates field by field, and disable its long-prompt tier.
 
+use std::collections::BTreeMap;
+
+use crate::config::RateOverride;
 use crate::model::Tokens;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,13 +74,49 @@ fn lookup(model: &str) -> Option<&'static Entry> {
     })
 }
 
-/// Estimated cost in USD; 0.0 for models we can't price.
-pub fn cost_usd(model: &str, t: &Tokens, fast: bool) -> f64 {
-    let Some(entry) = lookup(model) else { return 0.0 };
-    let rates = match entry.long_prompt {
-        Some((threshold, long)) if t.prompt() > threshold => long,
-        _ => entry.rates,
-    };
+#[derive(Debug, Default)]
+pub struct Pricing {
+    overrides: Vec<(String, RateOverride)>,
+}
+
+impl Pricing {
+    pub fn new(overrides: &BTreeMap<String, RateOverride>) -> Self {
+        Self { overrides: overrides.iter().map(|(k, v)| (k.clone(), *v)).collect() }
+    }
+
+    /// Estimated cost in USD; 0.0 for models we can't price.
+    pub fn cost_usd(&self, model: &str, t: &Tokens, fast: bool) -> f64 {
+        let Some(rates) = self.rates(model, t) else { return 0.0 };
+        cost_with(rates, t, fast)
+    }
+
+    fn rates(&self, model: &str, t: &Tokens) -> Option<Rates> {
+        let entry = lookup(model);
+        let ov = self
+            .overrides
+            .iter()
+            .filter(|(prefix, _)| model.starts_with(prefix.as_str()))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map(|(_, o)| o);
+        match (entry, ov) {
+            (None, None) => None,
+            (Some(e), None) => Some(match e.long_prompt {
+                Some((threshold, long)) if t.prompt() > threshold => long,
+                _ => e.rates,
+            }),
+            (base, Some(o)) => {
+                let b = base.map_or(r(0.0, 0.0, 0.0), |e| e.rates);
+                Some(Rates {
+                    input: o.input.unwrap_or(b.input),
+                    output: o.output.unwrap_or(b.output),
+                    cache_read: o.cache_read.unwrap_or(b.cache_read),
+                })
+            }
+        }
+    }
+}
+
+fn cost_with(rates: Rates, t: &Tokens, fast: bool) -> f64 {
     let per_mtok = t.input as f64 * rates.input
         + t.output as f64 * rates.output
         + t.cache_read as f64 * rates.cache_read
@@ -87,6 +129,10 @@ pub fn cost_usd(model: &str, t: &Tokens, fast: bool) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cost_usd(model: &str, t: &Tokens, fast: bool) -> f64 {
+        Pricing::default().cost_usd(model, t, fast)
+    }
 
     const M: u64 = 1_000_000;
 
@@ -122,5 +168,24 @@ mod tests {
         approx(cost_usd("claude-opus-5-5", &t, true), 40.0);
         approx(cost_usd("claude-opus-9", &t, false), 20.0);
         approx(cost_usd("<synthetic>", &t, false), 0.0);
+    }
+
+    #[test]
+    fn overrides_merge_over_builtin_rates() {
+        let mut o = BTreeMap::new();
+        o.insert("claude-opus".to_string(), RateOverride { output: Some(10.0), ..Default::default() });
+        o.insert("claude-opus-5-5".to_string(), RateOverride { input: Some(1.0), ..Default::default() });
+        o.insert("my-local-model".to_string(), RateOverride { input: Some(2.0), ..Default::default() });
+        let p = Pricing::new(&o);
+        let t = Tokens { input: M, output: M, ..Default::default() };
+        // Longest prefix wins: only input overridden, output stays built-in $20.
+        approx(p.cost_usd("claude-opus-5-5", &t, false), 1.0 + 20.0);
+        approx(p.cost_usd("claude-opus-5", &t, false), 5.0 + 10.0);
+        // Unknown model: missing fields are 0.
+        approx(p.cost_usd("my-local-model-7b", &t, false), 2.0);
+        // Override disables Haiku's long-prompt tier.
+        o.insert("claude-haiku-5-5".to_string(), RateOverride::default());
+        let long = Tokens { input: 150_000, ..Default::default() };
+        approx(Pricing::new(&o).cost_usd("claude-haiku-5-5", &long, false), 0.15 * 0.10);
     }
 }
