@@ -1,0 +1,9 @@
+{
+  "uuid": "agent-bar@local",
+  "name": "Agent Bar",
+  "description": "Shows AI agent subscription limits and usage (tokens, estimated cost) in the top bar. Requires the agent-bar-daemon service.",
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.agent-bar",
+  "url": "https://github.com/",
+  "version-name": "0.1.0"
+}

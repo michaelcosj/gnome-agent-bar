@@ -1,0 +1,23 @@
+{
+  "five_hour": {"utilization": 37.0, "resets_at": "2026-01-15T20:59:59.616768+00:00", "limit_dollars": null, "used_dollars": null, "remaining_dollars": null, "locked_reason": null},
+  "seven_day": {"utilization": 52.0, "resets_at": "2026-01-20T16:59:59.616794+00:00", "limit_dollars": null, "used_dollars": null, "remaining_dollars": null, "locked_reason": null},
+  "seven_day_opus": null,
+  "seven_day_sonnet": null,
+  "some_future_codename": {"utilization": 0.0, "resets_at": "2026-02-01T07:59:00+00:00", "limit_dollars": 100, "used_dollars": 0.0, "remaining_dollars": 100.0, "locked_reason": null},
+  "extra_usage": {"is_enabled": false, "monthly_limit": null, "used_credits": null, "utilization": null, "currency": null},
+  "limits": [
+    {"kind": "session", "group": "session", "percent": 37, "severity": "normal", "resets_at": "2026-01-15T20:59:59.616768+00:00", "scope": null, "is_active": true},
+    {"kind": "weekly_all", "group": "weekly", "percent": 52, "severity": "warning", "resets_at": "2026-01-20T16:59:59.616794+00:00", "scope": null, "is_active": false}
+  ],
+  "spend": {"used": {"amount_minor": 0, "currency": "USD", "exponent": 2}, "limit": null, "percent": 0, "severity": "normal", "enabled": false},
+  "seven_day_breakdown": {
+    "as_of": "2026-01-15T16:54:00.688283+00:00",
+    "window_started_at": "2026-01-13T16:59:59.616794+00:00",
+    "rows": [
+      {"key": "claude_code", "display_name": "Claude Code", "percent": 70},
+      {"key": "chat", "display_name": "Chats", "percent": 20},
+      {"key": "cowork", "display_name": "Cowork", "percent": 10},
+      {"key": "other", "display_name": "Other", "percent": 0}
+    ]
+  }
+}
