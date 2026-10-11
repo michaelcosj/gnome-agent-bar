@@ -21,7 +21,7 @@ const UsageProxy = Gio.DBusProxy.makeProxyWrapper(`
 export default class AgentBarExtension extends Extension {
     enable() {
         const settings = this.getSettings();
-        this._indicator = new Indicator(settings);
+        this._indicator = new Indicator(settings, this.dir.get_child('icons'));
         this._indicator.setPrefsHandler(() => this.openPreferences());
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._notifier = new Notifier(settings);

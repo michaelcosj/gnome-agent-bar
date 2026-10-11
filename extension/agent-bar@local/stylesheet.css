@@ -6,6 +6,9 @@
 }
 .agent-bar-ring.warning { color: #f8e45c; }
 .agent-bar-ring.critical { color: #ff7b63; }
+.agent-bar-logo { margin-right: 6px; }
+.agent-bar-logo.warning { color: #f8e45c; }
+.agent-bar-logo.critical { color: #ff7b63; }
 .agent-bar-label { font-feature-settings: "tnum"; }
 
 /* Menu */

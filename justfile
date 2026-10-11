@@ -36,7 +36,7 @@ run-daemon:
 
 # Zip for extensions.gnome.org
 pack:
-    gnome-extensions pack --force --extra-source=format.js --extra-source=indicator.js --extra-source=alerts.js --extra-source=notifier.js --out-dir=target {{ext_src}}
+    gnome-extensions pack --force --extra-source=format.js --extra-source=indicator.js --extra-source=alerts.js --extra-source=notifier.js --extra-source=icons --out-dir=target {{ext_src}}
 
 clean:
     rm -rf target {{ext_src}}/schemas/gschemas.compiled

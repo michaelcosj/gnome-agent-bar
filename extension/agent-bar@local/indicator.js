@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
@@ -23,9 +24,7 @@ class AgentBarMeter extends St.DrawingArea {
 
     setValue(pct, lvl) {
         this._pct = Math.min(100, Math.max(0, pct ?? 0));
-        for (const l of LEVELS)
-            this.remove_style_class_name(l);
-        this.add_style_class_name(lvl);
+        setLevel(this, lvl);
         this.queue_repaint();
     }
 
@@ -63,6 +62,12 @@ class AgentBarMeter extends St.DrawingArea {
     }
 });
 
+function setLevel(actor, lvl) {
+    for (const l of LEVELS)
+        actor.remove_style_class_name(l);
+    actor.add_style_class_name(lvl);
+}
+
 function roundedRect(cr, x, y, w, h) {
     const rad = h / 2;
     cr.newSubPath();
@@ -73,9 +78,12 @@ function roundedRect(cr, x, y, w, h) {
 
 export const Indicator = GObject.registerClass(
 class AgentBarIndicator extends PanelMenu.Button {
-    _init(settings) {
+    // iconsDir: Gio.File holding optional `<provider id>-symbolic.svg` logos.
+    _init(settings, iconsDir) {
         super._init(0.5, 'Agent Bar');
         this._settings = settings;
+        this._iconsDir = iconsDir;
+        this._icons = new Map();
         this._snapshot = null;
         this._daemonUp = false;
         this._onRefresh = null;
@@ -83,12 +91,14 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._renderId = 0;
 
         const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
+        this._logo = new St.Icon({style_class: 'system-status-icon agent-bar-logo', visible: false});
         this._ring = new Meter('ring', 'agent-bar-ring');
         this._label = new St.Label({
             text: '–',
             style_class: 'agent-bar-label',
             y_align: Clutter.ActorAlign.CENTER,
         });
+        box.add_child(this._logo);
         box.add_child(this._ring);
         box.add_child(this._label);
         this.add_child(box);
@@ -102,7 +112,7 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._footer.label.opacity = DIM_OPACITY;
         this.menu.addMenuItem(this._footer);
 
-        this._settingsIds = ['panel-limit', 'stats-range', 'show-remaining', 'show-countdown']
+        this._settingsIds = ['panel-limit', 'panel-icon', 'stats-range', 'show-remaining', 'show-countdown']
             .map(key => this._settings.connect(`changed::${key}`, () => this._queueRender()));
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
@@ -159,8 +169,7 @@ class AgentBarIndicator extends PanelMenu.Button {
         const limit = fmt.pickLimit(p?.limits, this._settings.get_string('panel-limit'));
         if (!limit) {
             this._label.text = this._daemonUp ? '…' : '–';
-            this._ring.setValue(0, 'normal');
-            this._ring.opacity = 128;
+            this._setGlyph(p?.id ?? 'claude', 0, 'normal', true);
             return;
         }
         const {pct} = fmt.shown(limit, this._settings.get_boolean('show-remaining'));
@@ -169,8 +178,29 @@ class AgentBarIndicator extends PanelMenu.Button {
         if (until && this._settings.get_boolean('show-countdown'))
             text += ` · ${until}`;
         this._label.text = text;
-        this._ring.setValue(pct, fmt.level(limit));
-        this._ring.opacity = p.status === 'ok' ? 255 : 128;
+        this._setGlyph(p.id, pct, fmt.level(limit), p.status !== 'ok');
+    }
+
+    // Provider logo (tinted by level) if available and chosen, else the ring gauge.
+    _setGlyph(providerId, pct, lvl, dim) {
+        const gicon = this._settings.get_string('panel-icon') === 'logo' ? this._providerIcon(providerId) : null;
+        this._logo.visible = !!gicon;
+        this._ring.visible = !gicon;
+        if (gicon) {
+            this._logo.gicon = gicon;
+            setLevel(this._logo, lvl);
+        } else {
+            this._ring.setValue(pct, lvl);
+        }
+        (gicon ? this._logo : this._ring).opacity = dim ? 128 : 255;
+    }
+
+    _providerIcon(id) {
+        if (!this._icons.has(id)) {
+            const file = this._iconsDir.get_child(`${id}-symbolic.svg`);
+            this._icons.set(id, file.query_exists(null) ? new Gio.FileIcon({file}) : null);
+        }
+        return this._icons.get(id);
     }
 
     _renderMenu(providers) {

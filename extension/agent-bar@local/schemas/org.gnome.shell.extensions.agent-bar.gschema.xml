@@ -6,6 +6,14 @@
       <summary>Limit shown in the top bar</summary>
       <description>A limit id such as "session" or "weekly_all", or "auto" for the most used one.</description>
     </key>
+    <key name="panel-icon" type="s">
+      <choices>
+        <choice value="logo"/>
+        <choice value="ring"/>
+      </choices>
+      <default>'logo'</default>
+      <summary>Top bar icon: provider logo (falls back to the ring if missing) or progress ring</summary>
+    </key>
     <key name="stats-range" type="s">
       <choices>
         <choice value="1d"/>

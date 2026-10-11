@@ -48,6 +48,7 @@ ev "Main.layoutManager.modalDialogGroup.get_children().forEach(d => d.close?.())
 ev "Main.messageTray.getSources().forEach(s => s.destroy())" >/dev/null
 sleep 1
 echo "panel: $(ev "$IND._label.text")"
+echo "glyph: $(ev "[$IND._logo.visible ? 'logo' : 'ring', $IND._logo.get_style_class_name()].join(' ')")"
 shot panel
 ev "$IND.menu.open(false)" >/dev/null; sleep 1; shot menu-1d
 ev "$IND._settings.set_string('stats-range','7d')" >/dev/null; sleep 1; shot menu-7d
@@ -59,7 +60,7 @@ LOW='{"version":1,"providers":[{"id":"claude","name":"Claude","status":"ok","lim
 ev "$EXT._onSnapshot('$LOW')" >/dev/null
 ev "$EXT._onSnapshot('$LOW')" >/dev/null
 echo "notifications: $(ev "JSON.stringify(Main.messageTray.getSources().filter(s => s.title === 'Agent Bar').flatMap(s => s.notifications.map(n => n.title)))")"
-echo "panel (low): $(ev "$IND._label.text")"
+echo "panel (low): $(ev "$IND._label.text") / $(ev "$IND._logo.visible ? $IND._logo.get_style_class_name() : $IND._ring.get_style_class_name()")"
 shot low
 
 gnome-extensions prefs $UUID; sleep 3

@@ -26,6 +26,10 @@ export default class AgentBarPreferences extends ExtensionPreferences {
             'Off shows what is used instead'));
         display.add(this._switch(settings, 'show-countdown', 'Show reset countdown in the top bar'));
         display.add(this._panelLimitRow(settings));
+        display.add(this._choiceRow(settings, 'panel-icon', 'Top bar icon', [
+            ['logo', 'Provider logo'],
+            ['ring', 'Progress ring'],
+        ]));
 
         const notify = new Adw.PreferencesGroup({
             title: 'Notifications',
@@ -59,17 +63,22 @@ export default class AgentBarPreferences extends ExtensionPreferences {
     }
 
     _panelLimitRow(settings) {
+        return this._choiceRow(settings, 'panel-limit', 'Limit in the top bar', PANEL_LIMITS);
+    }
+
+    // ComboRow bound to a string key; choices are [value, label] pairs.
+    _choiceRow(settings, key, title, choices) {
         const row = new Adw.ComboRow({
-            title: 'Limit in the top bar',
-            model: Gtk.StringList.new(PANEL_LIMITS.map(([, label]) => label)),
+            title,
+            model: Gtk.StringList.new(choices.map(([, label]) => label)),
         });
         const sync = () => {
-            const i = PANEL_LIMITS.findIndex(([id]) => id === settings.get_string('panel-limit'));
+            const i = choices.findIndex(([value]) => value === settings.get_string(key));
             row.selected = Math.max(0, i);
         };
         sync();
-        const id = settings.connect('changed::panel-limit', sync);
-        row.connect('notify::selected', () => settings.set_string('panel-limit', PANEL_LIMITS[row.selected][0]));
+        const id = settings.connect(`changed::${key}`, sync);
+        row.connect('notify::selected', () => settings.set_string(key, choices[row.selected][0]));
         row.connect('destroy', () => settings.disconnect(id));
         return row;
     }
