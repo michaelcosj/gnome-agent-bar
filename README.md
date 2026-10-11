@@ -108,3 +108,8 @@ The design notes, data-format findings and open items are in [`PLAN.md`](PLAN.md
 
 Personal project, version 0.1.0. The usage endpoints are undocumented and may change
 without notice.
+
+## License
+
+[MIT](LICENSE). Provider names and logos belong to their owners and aren't covered by
+this license.
