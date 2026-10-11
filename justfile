@@ -29,7 +29,7 @@ devkit:
     cd daemon && {{cargo}} build
     scripts/devkit.sh
 
-# Run the daemon in the foreground (until the systemd service exists)
+# Run the daemon in the foreground (dev; the installed service runs at login)
 run-daemon:
     cd daemon && {{cargo}} run --release
 
@@ -40,3 +40,36 @@ pack:
 clean:
     rm -rf target {{ext_src}}/schemas/gschemas.compiled
     cd daemon && {{cargo}} clean
+
+unit_dir := env_var("HOME") / ".config/systemd/user"
+bin_dir := env_var("HOME") / ".local/bin"
+
+# Install daemon (systemd user service, starts at login) and extension
+install: pack
+    @if pgrep -f 'target/(debug|release)/agent-bar-daemon' >/dev/null; then \
+        echo "Stop the dev daemon (just run-daemon / devkit) first: it holds the bus name."; exit 1; fi
+    {{cargo}} install --quiet --locked --path daemon --root "$HOME/.local"
+    install -Dm644 packaging/agent-bar.service "{{unit_dir}}/agent-bar.service"
+    systemctl --user daemon-reload
+    systemctl --user enable agent-bar.service
+    systemctl --user restart agent-bar.service
+    @# Replace a dev symlink without following it into the source tree.
+    @if [ -L "{{ext_dst}}" ]; then rm "{{ext_dst}}"; fi
+    gnome-extensions install --force target/{{uuid}}.shell-extension.zip
+    @gnome-extensions enable {{uuid}} 2>/dev/null && echo "Extension enabled." \
+        || echo "Extension installed. Log out and back in once, then: gnome-extensions enable {{uuid}}"
+
+# Remove the service, binary and extension
+uninstall:
+    -systemctl --user disable --now agent-bar.service
+    rm -f "{{unit_dir}}/agent-bar.service" "{{bin_dir}}/agent-bar-daemon"
+    systemctl --user daemon-reload
+    -gnome-extensions uninstall {{uuid}}
+
+# Service status and recent logs
+status:
+    -systemctl --user --no-pager status agent-bar.service
+    -gnome-extensions info {{uuid}}
+
+logs:
+    journalctl --user -u agent-bar.service -f

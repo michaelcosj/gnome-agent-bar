@@ -119,7 +119,8 @@ agent-bar/
    `PanelMenu.Button` (icon + label of the most-constrained active limit),
    dropdown sections: limits (bars + countdown), range switcher 1d/7d/30d (tokens + cost +
    by-model), breakdown, footer (Refresh, “updated Xm ago”). Daemon-absent state. Clean `disable()`.
-4. **Packaging** — systemd user unit, `just install` (cargo install, schemas, extension copy),
+4. **Packaging** ✅ (2026-10-11) — `just install` / `uninstall` / `status` / `logs`; sandboxed
+   `Type=dbus` user unit under graphical-session.target (~17 MB RSS). Was: systemd user unit, `just install` (cargo install, schemas, extension copy),
    optional D-Bus activation.
 5. **Polish** — Adw prefs (panel label choice, poll interval, compact mode, hidden providers),
    threshold notifications (once per window per reset), 24 h sparkline.

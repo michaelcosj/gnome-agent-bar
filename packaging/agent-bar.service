@@ -1,0 +1,24 @@
+[Unit]
+Description=Agent Bar usage daemon (AI subscription limits and usage stats)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Started once dev.agentbar.Usage is on the session bus.
+Type=dbus
+BusName=dev.agentbar.Usage
+ExecStart=%h/.local/bin/agent-bar-daemon
+Restart=on-failure
+RestartSec=10
+
+# Only needs to read ~/.claude and talk to the network and session bus.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryMax=128M
+
+[Install]
+WantedBy=graphical-session.target
