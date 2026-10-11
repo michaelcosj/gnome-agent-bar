@@ -1,3 +1,4 @@
 target/
 extension/*/schemas/gschemas.compiled
 extension/*/icons/*.svg
+.direnv/

@@ -1,7 +1,7 @@
 uuid := "agent-bar@local"
 ext_src := "extension/" + uuid
 ext_dst := env_var("HOME") / ".local/share/gnome-shell/extensions" / uuid
-cargo := env_var_or_default("CARGO", env_var("HOME") / ".cargo/bin/cargo")
+cargo := env_var_or_default("CARGO", "cargo")
 
 default:
     @just --list

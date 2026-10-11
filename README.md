@@ -25,7 +25,8 @@ It has two parts:
 ## Requirements
 
 - GNOME Shell 50 (developed on Fedora 44, Wayland)
-- Rust toolchain (`cargo`); [`just`](https://github.com/casey/just) for the recipes
+- Rust toolchain (`cargo`, a C compiler) and [`just`](https://github.com/casey/just), or
+  Nix: `nix develop` (or direnv's `use flake`) provides both
 - At least one of the following signed in on this machine:
   - **Claude:** [Claude Code](https://claude.com/claude-code) with a Pro/Max subscription
   - **ChatGPT:** [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT
@@ -92,6 +93,7 @@ opencode's data directory, which SQLite needs for reading a database in WAL mode
 ## Develop
 
 ```sh
+nix develop       # optional: toolchain from flake.nix (direnv: `direnv allow`)
 just test         # rustfmt check, cargo tests, extension unit tests, headless Shell test
 just run-daemon   # daemon in the foreground (stop the service first)
 just devkit       # nested GNOME Shell window with the extension and a debug daemon
