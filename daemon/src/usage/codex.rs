@@ -182,7 +182,9 @@ mod tests {
         std::fs::create_dir_all(&day).unwrap();
         let log = [
             r#"{"timestamp":"2026-10-11T10:00:00Z","type":"session_meta","payload":{"id":"x"}}"#.to_string() + "\n",
-            r#"{"timestamp":"2026-10-11T10:00:01Z","type":"turn_context","payload":{"model":"gpt-6.1-sol","cwd":"/"}}"#.to_string() + "\n",
+            r#"{"timestamp":"2026-10-11T10:00:01Z","type":"turn_context","payload":{"model":"gpt-6.1-sol","cwd":"/"}}"#
+                .to_string()
+                + "\n",
             token_count("2026-10-11T10:00:05Z", 1000, 0, 100),
             token_count("2026-10-11T10:00:06Z", 1000, 0, 100), // repeated snapshot
             token_count("2026-10-11T10:05:00Z", 3000, 1500, 300),

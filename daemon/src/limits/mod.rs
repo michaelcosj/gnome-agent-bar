@@ -101,9 +101,7 @@ impl Limits {
 
     pub async fn refresh(&mut self) {
         let now = Instant::now();
-        if self.backoff_until.is_some_and(|t| now < t)
-            || self.last_attempt.is_some_and(|t| now - t < MIN_INTERVAL)
-        {
+        if self.backoff_until.is_some_and(|t| now < t) || self.last_attempt.is_some_and(|t| now - t < MIN_INTERVAL) {
             return;
         }
         self.last_attempt = Some(now);
@@ -149,8 +147,7 @@ impl Limits {
         match parsed {
             Ok(p) => {
                 debug!(windows = p.windows.len(), "{} limits updated", self.api.name());
-                self.limit_reached =
-                    p.limit_reached.unwrap_or_else(|| p.windows.iter().any(|w| w.used_pct >= 100.0));
+                self.limit_reached = p.limit_reached.unwrap_or_else(|| p.windows.iter().any(|w| w.used_pct >= 100.0));
                 self.windows = p.windows;
                 self.breakdown = p.breakdown;
                 if p.plan.is_some() {

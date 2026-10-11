@@ -94,10 +94,7 @@ fn split_fast(model: &str) -> (&str, bool) {
 
 fn lookup(model: &str) -> Option<&'static Entry> {
     // Longest prefix wins so "claude-opus-5-5" isn't priced as "claude-opus-5".
-    let exact = TABLE
-        .iter()
-        .filter(|e| model.starts_with(e.prefix))
-        .max_by_key(|e| e.prefix.len());
+    let exact = TABLE.iter().filter(|e| model.starts_with(e.prefix)).max_by_key(|e| e.prefix.len());
     exact.or_else(|| {
         let (_, fallback) = FAMILY_FALLBACK.iter().find(|(family, _)| model.contains(family))?;
         TABLE.iter().find(|e| e.prefix == *fallback)

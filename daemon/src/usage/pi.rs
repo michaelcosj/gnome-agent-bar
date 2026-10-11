@@ -101,7 +101,8 @@ fn parse_line(path: &Path, line: &[u8], accounts: &[(String, Account)]) -> Optio
         return None; // failed request
     }
     let session = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let rec = UsageRecord { ts: l.timestamp?, account, tool: TOOL, model, session: session.clone(), tokens, fast: false };
+    let rec =
+        UsageRecord { ts: l.timestamp?, account, tool: TOOL, model, session: session.clone(), tokens, fast: false };
     Some((format!("pi:{session}:{}", l.id?), rec))
 }
 
@@ -159,7 +160,8 @@ mod tests {
         let sessions = dir.path().join("sessions/--home--");
         std::fs::create_dir_all(&sessions).unwrap();
         let log = [
-            r#"{"type":"session","version":3,"id":"s","timestamp":"2026-10-11T09:59:00Z","cwd":"/"}"#.to_string() + "\n",
+            r#"{"type":"session","version":3,"id":"s","timestamp":"2026-10-11T09:59:00Z","cwd":"/"}"#.to_string()
+                + "\n",
             msg("a1", "openai", "gpt-6.1-sol", 1000, 100, 4000),
             msg("a2", "openai", "gpt-6.1-sol", 0, 0, 0), // errored request
             msg("a3", "anthropic", "claude-opus-5-5", 50, 5, 0), // API key: not a subscription

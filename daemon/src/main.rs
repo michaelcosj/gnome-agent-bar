@@ -49,10 +49,8 @@ impl App {
         let claude_dir = ClaudeApi::default_config_dir().context("cannot locate Claude config dir")?;
         let codex_home = CodexLogs::default_home().context("cannot locate Codex home")?;
 
-        let mut sources: Vec<Box<dyn UsageSource>> = vec![
-            Box::new(ClaudeCodeLogs::new(&claude_dir)),
-            Box::new(CodexLogs::new(codex_home.clone())),
-        ];
+        let mut sources: Vec<Box<dyn UsageSource>> =
+            vec![Box::new(ClaudeCodeLogs::new(&claude_dir)), Box::new(CodexLogs::new(codex_home.clone()))];
         if let Some(dir) = PiSessions::default_agent_dir() {
             sources.push(Box::new(PiSessions::new(dir)));
         }
@@ -138,9 +136,7 @@ impl App {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_writer(std::io::stderr)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();

@@ -58,10 +58,7 @@ impl UsageStore {
     /// Records are keyed per source; a repeated key keeps the field-wise max tokens
     /// (sources log streaming partials and duplicates).
     pub fn upsert(&mut self, key: String, rec: UsageRecord) {
-        self.records
-            .entry(key)
-            .and_modify(|e| e.tokens = e.tokens.max(rec.tokens))
-            .or_insert(rec);
+        self.records.entry(key).and_modify(|e| e.tokens = e.tokens.max(rec.tokens)).or_insert(rec);
     }
 
     pub fn prune(&mut self, now: DateTime<Utc>) {

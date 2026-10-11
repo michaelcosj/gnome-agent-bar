@@ -12,6 +12,7 @@ build:
 
 # Rust tests + headless GNOME Shell smoke test
 test:
+    cd daemon && {{cargo}} fmt --check
     cd daemon && {{cargo}} test
     gjs -m extension/tests/unit.js
     cd daemon && {{cargo}} build
