@@ -22,14 +22,18 @@ extensions.gnome.org (EGO) from day one.
 
 ```
 GNOME Shell ─ agent-bar@local (GJS)
-  top bar:  ◔ 37% · 2h13m
-  dropdown: limits w/ progress bars + reset timers, 1d/7d/30d tokens & cost, product breakdown
+  top bar:  [C] 74%  [O] 36% · 1h30m   (countdown on the account closest to its limit)
+  dropdown: account tabs; limits w/ bars + reset timers, 24 h chart, 1d/7d/30d tokens & cost,
+            by model, by tool, product breakdown
         ▲ Changed(json)            │ Refresh()
         │                          ▼
 agent-bar-daemon (Rust: tokio, zbus, reqwest, notify, serde) — systemd --user
-  ├─ claude::limits  → GET api.anthropic.com/api/oauth/usage
-  ├─ claude::logs    → ~/.claude/projects/**/*.jsonl
-  └─ codex::*        → (next) ~/.codex/sessions/**
+  ├─ limits::claude   → GET api.anthropic.com/api/oauth/usage   (Claude Code's token)
+  ├─ limits::chatgpt  → GET chatgpt.com/backend-api/wham/usage  (Codex's token)
+  └─ usage::*  → one store, attributed to the Claude / ChatGPT account:
+       claude_code ~/.claude/projects/**/*.jsonl    codex ~/.codex/sessions/**/rollout-*.jsonl
+       pi ~/.pi/agent/sessions/**/*.jsonl (OAuth providers only)
+       opencode ~/.local/share/opencode/opencode.db (cost 0 = subscription)
 ```
 
 ## Repo layout
@@ -41,7 +45,8 @@ agent-bar/
 │  ├─ src/model.rs           # Snapshot, ProviderSnapshot, LimitWindow, UsageStats
 │  ├─ src/dbus.rs            # zbus interface
 │  ├─ src/pricing.rs         # per-model $/MTok table (overridable via config)
-│  └─ src/providers/{mod.rs, claude/{limits.rs, logs.rs}}
+│  ├─ src/limits/{mod.rs (throttle/backoff), claude.rs, chatgpt.rs}
+│  └─ src/usage/{mod.rs (store, ranges), tail.rs, claude_code.rs, codex.rs, pi.rs, opencode.rs}
 │  └─ tests/fixtures/
 ├─ extension/agent-bar@local/{metadata.json, extension.js, prefs.js, stylesheet.css, schemas/}
 ├─ packaging/agent-bar.service
@@ -127,7 +132,13 @@ agent-bar/
    Then: ~/.config/agent-bar/config.toml (intervals, price overrides), 24 h hourly cost
    chart with hover, wrapped errors, 1 req/min floor + fixed backoff, offline headless test. Was: Adw prefs (panel label choice, poll interval, compact mode, hidden providers),
    threshold notifications (once per window per reset), 24 h sparkline.
-6. **Codex provider** — `~/.codex/sessions/**` `token_count` events (rate limits + tokens).
+6. **Codex / ChatGPT** ✅ (2026-10-11) — ChatGPT account with limits from `wham/usage`
+   (Codex's token + `ChatGPT-Account-Id`; JWT `exp` checked locally, never refreshed) and
+   usage from Codex, pi and opencode. Only subscription usage is counted: Codex in
+   `auth_mode: chatgpt`, pi providers with `type: oauth`, opencode rows with cost 0; free and
+   API-key models are skipped. OpenAI pricing incl. `-fast` ids (2x; gpt-5.5 2.5x).
+   Extension: account tabs, both accounts in the top bar, By tool, `limit reached` badge,
+   prefs for accounts / countdown / hidden accounts. Headless test is fully offline for both.
 
 ## Dev notes
 - `just test` = cargo tests + headless Shell smoke test. `just devkit` = nested Shell window
@@ -137,6 +148,9 @@ agent-bar/
   system gnome-shell, so the scripts unset them.
 
 ## Open items
+- pi and opencode sign in to ChatGPT with a separate token-sharing login; their usage counts
+  toward the stats but the bars only reflect what `wham/usage` reports for Codex's login.
+- Codex rollouts also carry `token_usage_record` lines (same numbers as `token_count`); ignored.
 - Pricing table in `pricing.rs` is from the official docs as of 2026-10-06; refresh it when
   models launch (unknown models fall back to their family's current price). Labelled “est.”.
 - Ranges are rolling (last 24 h / 7 d / 30 d), not calendar days.

@@ -78,12 +78,34 @@ export function level(limit) {
     return ['normal', 'warning', 'critical'][lvl];
 }
 
-// Limit for the top bar: the configured id, else the most used.
+// Equivalent windows across accounts: Claude's ids, then ChatGPT's.
+const LIMIT_ALIASES = {
+    session: ['session', 'primary'],
+    weekly_all: ['weekly_all', 'secondary'],
+};
+
+// Limit for the top bar: the configured kind, else the most used.
 export function pickLimit(limits, preferred) {
     if (!limits?.length)
         return null;
-    const chosen = preferred !== 'auto' && limits.find(l => l.id === preferred);
+    const ids = LIMIT_ALIASES[preferred] ?? [preferred];
+    const chosen = preferred !== 'auto' && limits.find(l => ids.includes(l.id));
     return chosen || limits.reduce((a, b) => (b.used_pct > a.used_pct ? b : a));
+}
+
+// Top bar entries [{provider, limit, closest}]: one per shown account that has
+// limits. `closest` marks the account nearest to running out (it gets the countdown).
+export function panelEntries(providers, {mode = 'all', hidden = [], preferred = 'auto'} = {}) {
+    const entries = (providers ?? [])
+        .filter(p => !hidden.includes(p.id))
+        .map(provider => ({provider, limit: pickLimit(provider.limits, preferred), closest: false}))
+        .filter(e => e.limit);
+    if (!entries.length)
+        return [];
+    const urgency = e => (e.provider.limit_reached ? 1000 : e.limit.used_pct);
+    const closest = entries.reduce((a, b) => (urgency(b) > urgency(a) ? b : a));
+    closest.closest = true;
+    return mode === 'closest' ? [closest] : entries;
 }
 
 // Local clock hour for an ISO timestamp: "14:00".
@@ -102,4 +124,9 @@ export function hourlySummary(buckets) {
 
 export function shortModel(model) {
     return model.replace(/^claude-/, '');
+}
+
+// Account shown in the menu: the remembered one if still present, else the first.
+export function selectedAccount(providers, remembered) {
+    return providers.find(p => p.id === remembered) ?? providers[0] ?? null;
 }

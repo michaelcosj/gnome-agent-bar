@@ -168,18 +168,8 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._onPrefs = null;
         this._renderId = 0;
 
-        const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
-        this._logo = new St.Icon({style_class: 'system-status-icon agent-bar-logo', visible: false});
-        this._ring = new Meter('ring', 'agent-bar-ring');
-        this._label = new St.Label({
-            text: '–',
-            style_class: 'agent-bar-label',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        box.add_child(this._logo);
-        box.add_child(this._ring);
-        box.add_child(this._label);
-        this.add_child(box);
+        this._panelBox = new St.BoxLayout({style_class: 'panel-status-menu-box agent-bar-panel'});
+        this.add_child(this._panelBox);
 
         this._content = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._content);
@@ -190,7 +180,8 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._footer.label.opacity = DIM_OPACITY;
         this.menu.addMenuItem(this._footer);
 
-        this._settingsIds = ['panel-limit', 'panel-icon', 'stats-range', 'show-remaining', 'show-countdown']
+        this._settingsIds = ['panel-limit', 'panel-icon', 'stats-range', 'show-remaining', 'panel-countdown',
+            'panel-accounts', 'hidden-accounts', 'menu-account']
             .map(key => this._settings.connect(`changed::${key}`, () => this._queueRender()));
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
@@ -211,6 +202,15 @@ class AgentBarIndicator extends PanelMenu.Button {
 
     setPrefsHandler(fn) {
         this._onPrefs = fn;
+    }
+
+    // Top bar text and glyph classes, e.g. "claude:logo normal 74% · 2h13m | openai:logo normal 100%" (for tests).
+    get panelSummary() {
+        const kids = this._panelBox.get_children();
+        const parts = [];
+        for (let i = 0; i + 1 < kids.length; i += 2)
+            parts.push(`${kids[i]._accountId}:${kids[i].get_style_class_name()} ${kids[i + 1].text}`);
+        return parts.join(' | ');
     }
 
     setDaemonUp(up) {
@@ -238,39 +238,54 @@ class AgentBarIndicator extends PanelMenu.Button {
         // The Shell can destroy us (e.g. on shutdown) before disable() drops late D-Bus callbacks.
         if (this._destroyed)
             return;
-        const providers = this._daemonUp ? this._snapshot?.providers ?? [] : [];
-        this._renderPanel(providers[0]);
+        const hidden = this._settings.get_strv('hidden-accounts');
+        const providers = (this._daemonUp ? this._snapshot?.providers ?? [] : [])
+            .filter(p => !hidden.includes(p.id));
+        this._renderPanel(providers);
         this._renderMenu(providers);
     }
 
-    _renderPanel(p) {
-        const limit = fmt.pickLimit(p?.limits, this._settings.get_string('panel-limit'));
-        if (!limit) {
-            this._label.text = this._daemonUp ? '…' : '–';
-            this._setGlyph(p?.id ?? 'claude', 0, 'normal', true);
+    _renderPanel(providers) {
+        this._panelBox.destroy_all_children();
+        const entries = fmt.panelEntries(providers, {
+            mode: this._settings.get_string('panel-accounts'),
+            preferred: this._settings.get_string('panel-limit'),
+        });
+        if (!entries.length) {
+            const id = providers[0]?.id ?? 'claude';
+            this._addGlyph(id, 0, 'normal', true, this._daemonUp ? '…' : '–');
             return;
         }
-        const {pct} = fmt.shown(limit, this._settings.get_boolean('show-remaining'));
-        let text = fmt.percent(pct);
-        const until = fmt.untilReset(limit.resets_at);
-        if (until && this._settings.get_boolean('show-countdown'))
-            text += ` · ${until}`;
-        this._label.text = text;
-        this._setGlyph(p.id, pct, fmt.level(limit), p.status !== 'ok');
+        const countdown = this._settings.get_string('panel-countdown');
+        const showRemaining = this._settings.get_boolean('show-remaining');
+        for (const {provider: p, limit, closest} of entries) {
+            const {pct} = fmt.shown(limit, showRemaining);
+            let text = fmt.percent(pct);
+            const until = fmt.untilReset(limit.resets_at);
+            if (until && (countdown === 'all' || (countdown === 'closest' && closest)))
+                text += ` · ${until}`;
+            const lvl = p.limit_reached ? 'critical' : fmt.level(limit);
+            this._addGlyph(p.id, pct, lvl, p.status !== 'ok', text);
+        }
     }
 
     // Provider logo (tinted by level) if available and chosen, else the ring gauge.
-    _setGlyph(providerId, pct, lvl, dim) {
+    _addGlyph(providerId, pct, lvl, dim, text) {
         const gicon = this._settings.get_string('panel-icon') === 'logo' ? this._providerIcon(providerId) : null;
-        this._logo.visible = !!gicon;
-        this._ring.visible = !gicon;
+        let glyph;
         if (gicon) {
-            this._logo.gicon = gicon;
-            setLevel(this._logo, lvl);
+            glyph = new St.Icon({gicon, style_class: 'system-status-icon agent-bar-logo'});
+            setLevel(glyph, lvl);
         } else {
-            this._ring.setValue(pct, lvl);
+            const ring = new Meter('ring', 'agent-bar-ring');
+            ring.setValue(pct, lvl);
+            glyph = ring;
         }
-        (gicon ? this._logo : this._ring).opacity = dim ? 128 : 255;
+        glyph.opacity = dim ? 128 : 255;
+        glyph._accountId = providerId;
+        const label = new St.Label({text, style_class: 'agent-bar-label', y_align: Clutter.ActorAlign.CENTER});
+        this._panelBox.add_child(glyph);
+        this._panelBox.add_child(label);
     }
 
     _providerIcon(id) {
@@ -299,16 +314,20 @@ class AgentBarIndicator extends PanelMenu.Button {
             return;
         }
 
-        for (const p of providers)
-            this._renderProvider(p);
+        const p = fmt.selectedAccount(providers, this._settings.get_string('menu-account'));
+        if (providers.length > 1)
+            this._accountTabs(providers, p.id);
+        this._renderProvider(p);
 
-        this._footer.label.text = `Limits updated ${fmt.ago(providers[0].limits_updated_at)}`;
+        this._footer.visible = !!p.limits.length || p.status !== 'ok';
+        this._footer.label.text = `Limits updated ${fmt.ago(p.limits_updated_at)}`;
     }
 
     _renderProvider(p) {
         const section = this._content;
         const plan = p.plan ? ` · ${p.plan[0].toUpperCase()}${p.plan.slice(1)}` : '';
-        this._heading(section, `${p.name}${plan}`, p.status !== 'ok' ? p.status : null);
+        const badge = p.limit_reached ? 'limit reached' : p.status !== 'ok' ? p.status : null;
+        this._heading(section, `${p.name}${plan}`, badge, p.limit_reached ? 'critical' : '');
         if (p.status !== 'ok' && p.error)
             this._wrappedRow(section, p.error, 'agent-bar-error');
 
@@ -333,7 +352,13 @@ class AgentBarIndicator extends PanelMenu.Button {
         if (s?.by_model.length) {
             section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('By model'));
             for (const m of s.by_model.slice(0, 3))
-                this._row(section, fmt.shortModel(m.model), `${fmt.cost(m.cost_usd)} · ${fmt.tokens(m.total_tokens)}`, 'sub');
+                this._row(section, fmt.shortModel(m.name), `${fmt.cost(m.cost_usd)} · ${fmt.tokens(m.total_tokens)}`, 'sub');
+        }
+        // Only worth a section when usage came from more than one tool.
+        if (s?.by_tool?.length > 1) {
+            section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('By tool'));
+            for (const t of s.by_tool)
+                this._row(section, t.name, `${fmt.cost(t.cost_usd)} · ${fmt.tokens(t.total_tokens)}`, 'sub');
         }
 
         const shares = (p.breakdown ?? []).filter(r => r.pct > 0).sort((a, b) => b.pct - a.pct);
@@ -399,6 +424,24 @@ class AgentBarIndicator extends PanelMenu.Button {
         section.addMenuItem(item);
     }
 
+    // One tab per account, labelled with what's left of its tightest limit.
+    _accountTabs(providers, current) {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const box = new St.BoxLayout({style_class: 'agent-bar-tabs', x_expand: true});
+        const showRemaining = this._settings.get_boolean('show-remaining');
+        for (const p of providers) {
+            const limit = fmt.pickLimit(p.limits, 'auto');
+            const label = limit ? `${p.name}  ${fmt.percent(fmt.shown(limit, showRemaining).pct)}` : p.name;
+            const btn = new St.Button({label, style_class: 'agent-bar-tab button', can_focus: true, x_expand: true});
+            if (p.id === current)
+                btn.add_style_pseudo_class('checked');
+            btn.connect('clicked', () => this._settings.set_string('menu-account', p.id));
+            box.add_child(btn);
+        }
+        item.add_child(box);
+        this._content.addMenuItem(item);
+    }
+
     _rangeSwitcher(section, current) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         const box = new St.BoxLayout({style_class: 'agent-bar-ranges', x_expand: true});
@@ -424,11 +467,11 @@ class AgentBarIndicator extends PanelMenu.Button {
         section.addMenuItem(item);
     }
 
-    _heading(section, text, badge = null) {
+    _heading(section, text, badge = null, badgeLevel = '') {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         item.add_child(new St.Label({text, style_class: 'agent-bar-heading', x_expand: true}));
         if (badge)
-            item.add_child(new St.Label({text: badge, style_class: 'agent-bar-badge'}));
+            item.add_child(new St.Label({text: badge, style_class: `agent-bar-badge ${badgeLevel}`}));
         section.addMenuItem(item);
     }
 

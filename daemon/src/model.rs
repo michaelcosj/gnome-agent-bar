@@ -32,6 +32,8 @@ pub struct ProviderSnapshot {
     pub error: Option<String>,
     pub limits_updated_at: Option<DateTime<Utc>>,
     pub limits: Vec<LimitWindow>,
+    /// The server says requests are currently being refused.
+    pub limit_reached: bool,
     pub breakdown: Vec<BreakdownRow>,
     /// Keyed by range id: "1d", "7d", "30d" (rolling windows ending now).
     pub stats: BTreeMap<String, UsageStats>,
@@ -73,12 +75,14 @@ pub struct UsageStats {
     pub cost_usd: f64,
     pub requests: u64,
     pub sessions: u64,
-    pub by_model: Vec<ModelUsage>,
+    pub by_model: Vec<NamedUsage>,
+    /// Per tool (Claude Code, Codex, pi, opencode).
+    pub by_tool: Vec<NamedUsage>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
-pub struct ModelUsage {
-    pub model: String,
+pub struct NamedUsage {
+    pub name: String,
     pub total_tokens: u64,
     pub cost_usd: f64,
     pub requests: u64,

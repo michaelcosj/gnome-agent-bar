@@ -11,10 +11,12 @@ ExecStart=%h/.local/bin/agent-bar-daemon
 Restart=on-failure
 RestartSec=10
 
-# Only needs to read ~/.claude and talk to the network and session bus.
+# Only needs to read the agents' logs/credentials and talk to the network and session bus.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# opencode's SQLite runs in WAL mode: even readers update opencode.db-shm.
+ReadWritePaths=-%h/.local/share/opencode
 PrivateTmp=yes
 LockPersonality=yes
 RestrictRealtime=yes

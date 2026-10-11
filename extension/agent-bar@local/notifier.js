@@ -18,7 +18,9 @@ export class Notifier {
             warnLeft: this._settings.get_int('notify-warn-left'),
             criticalLeft: this._settings.get_int('notify-critical-left'),
         };
-        for (const alert of dueAlerts(snapshot.providers, thresholds, this._sent))
+        const hidden = this._settings.get_strv('hidden-accounts');
+        const providers = (snapshot.providers ?? []).filter(p => !hidden.includes(p.id));
+        for (const alert of dueAlerts(providers, thresholds, this._sent))
             this._notify(alert);
     }
 

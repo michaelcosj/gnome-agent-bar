@@ -4,11 +4,17 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-// [settings value, label] for the top bar limit; ids match the daemon's limit ids.
+// [settings value, label] for the top bar limit; the daemon maps ChatGPT's windows onto these.
 const PANEL_LIMITS = [
     ['auto', 'Closest to running out'],
-    ['session', '5-hour'],
+    ['session', 'Short window (5-hour)'],
     ['weekly_all', 'Weekly'],
+];
+
+// Account ids match the daemon's provider ids.
+const ACCOUNTS = [
+    ['claude', 'Claude'],
+    ['openai', 'ChatGPT'],
 ];
 
 export default class AgentBarPreferences extends ExtensionPreferences {
@@ -24,12 +30,28 @@ export default class AgentBarPreferences extends ExtensionPreferences {
         page.add(display);
         display.add(this._switch(settings, 'show-remaining', 'Show what is left',
             'Off shows what is used instead'));
-        display.add(this._switch(settings, 'show-countdown', 'Show reset countdown in the top bar'));
+        display.add(this._choiceRow(settings, 'panel-accounts', 'Accounts in the top bar', [
+            ['all', 'All'],
+            ['closest', 'Closest to its limit'],
+        ]));
         display.add(this._panelLimitRow(settings));
+        display.add(this._choiceRow(settings, 'panel-countdown', 'Reset countdown in the top bar', [
+            ['closest', 'Account closest to its limit'],
+            ['all', 'Every account'],
+            ['none', 'Off'],
+        ]));
         display.add(this._choiceRow(settings, 'panel-icon', 'Top bar icon', [
             ['logo', 'Provider logo'],
             ['ring', 'Progress ring'],
         ]));
+
+        const accounts = new Adw.PreferencesGroup({
+            title: 'Accounts',
+            description: 'Accounts appear once you are signed in or have usage from Claude Code, Codex, pi or opencode.',
+        });
+        page.add(accounts);
+        for (const [id, name] of ACCOUNTS)
+            accounts.add(this._accountRow(settings, id, name));
 
         const notify = new Adw.PreferencesGroup({
             title: 'Notifications',
@@ -59,6 +81,25 @@ export default class AgentBarPreferences extends ExtensionPreferences {
     _switch(settings, key, title, subtitle = '') {
         const row = new Adw.SwitchRow({title, subtitle});
         settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    // Switch that removes/adds the account id in the hidden-accounts list.
+    _accountRow(settings, id, title) {
+        const row = new Adw.SwitchRow({title});
+        const sync = () => {
+            row.active = !settings.get_strv('hidden-accounts').includes(id);
+        };
+        sync();
+        const handler = settings.connect('changed::hidden-accounts', sync);
+        row.connect('notify::active', () => {
+            const hidden = settings.get_strv('hidden-accounts').filter(x => x !== id);
+            if (!row.active)
+                hidden.push(id);
+            if (hidden.join() !== settings.get_strv('hidden-accounts').join())
+                settings.set_strv('hidden-accounts', hidden);
+        });
+        row.connect('destroy', () => settings.disconnect(handler));
         return row;
     }
 

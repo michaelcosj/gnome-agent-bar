@@ -24,13 +24,14 @@ export default class extends Extension { enable() { global.context.unsafe_mode =
         OUT="$OUT" timeout 120 dbus-run-session -- "$0" --inner
 fi
 
-# Offline daemon: fake Claude dir + local usage server, so tests never hit (or get
-# rate limited by) the real endpoint and the data is deterministic.
+# Offline daemon: fake Claude/Codex/pi/opencode data + a local server for both usage
+# endpoints, so tests never hit (or get rate limited by) the real ones and the data
+# is deterministic. The daemon also gets its own HOME so it never sees real logs.
 FAKE=$OUT/fake-claude
-python3 -I - "$FAKE" <<'PY'
-import json, os, sys, time, random
+python3 -I - "$FAKE" "$OUT" <<'PY'
+import base64, json, os, sqlite3, sys, time, random
 from datetime import datetime, timedelta, timezone
-root = sys.argv[1]; now = datetime.now(timezone.utc); iso = lambda d: d.isoformat().replace("+00:00", "Z")
+root, out = sys.argv[1], sys.argv[2]; now = datetime.now(timezone.utc); iso = lambda d: d.isoformat().replace("+00:00", "Z")
 os.makedirs(f"{root}/projects/demo", exist_ok=True)
 json.dump({"claudeAiOauth": {"accessToken": "test-token", "expiresAt": int(time.time() * 1000) + 86_400_000,
            "subscriptionType": "pro"}}, open(f"{root}/.credentials.json", "w"))
@@ -49,6 +50,40 @@ json.dump({"limits": [lim("session", "session", 22, 3.7), lim("weekly_all", "wee
            "seven_day_breakdown": {"rows": [{"display_name": "Claude Code", "percent": 82},
                                             {"display_name": "Cowork", "percent": 16}, {"display_name": "Chats", "percent": 2}]}},
           open(f"{root}/srv/usage", "w"))
+json.dump({"plan_type": "plus", "rate_limit": {"limit_reached": False,
+           "primary_window": {"used_percent": 64, "limit_window_seconds": 18000, "reset_at": int(time.time()) + 5400},
+           "secondary_window": {"used_percent": 31, "limit_window_seconds": 604800, "reset_at": int(time.time()) + 400000}}},
+          open(f"{root}/srv/wham", "w"))
+
+# Codex (signed in with ChatGPT): one rollout with two turns.
+codex = f"{out}/home/.codex"; os.makedirs(f"{codex}/sessions/2026/10/11", exist_ok=True)
+jwt = "e30." + base64.urlsafe_b64encode(json.dumps({"exp": int(time.time()) + 86400}).encode()).decode().rstrip("=") + ".sig"
+json.dump({"auth_mode": "chatgpt", "tokens": {"access_token": jwt, "account_id": "acct-test"}}, open(f"{codex}/auth.json", "w"))
+with open(f"{codex}/sessions/2026/10/11/rollout-test.jsonl", "w") as f:
+    f.write(json.dumps({"timestamp": iso(now - timedelta(hours=2)), "type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}) + "\n")
+    for k, (inp, cached, outp) in enumerate([(40000, 30000, 900), (95000, 80000, 2100)]):
+        f.write(json.dumps({"timestamp": iso(now - timedelta(hours=2 - k)), "type": "event_msg", "payload": {"type": "token_count",
+                "info": {"total_token_usage": {"input_tokens": inp, "cached_input_tokens": cached, "output_tokens": outp,
+                                               "total_tokens": inp + outp}}}}) + "\n")
+
+# pi (OAuth to openai): one turn.
+pi = f"{out}/home/.pi/agent"; os.makedirs(f"{pi}/sessions/--work--", exist_ok=True)
+json.dump({"openai": {"type": "oauth"}}, open(f"{pi}/auth.json", "w"))
+with open(f"{pi}/sessions/--work--/s.jsonl", "w") as f:
+    f.write(json.dumps({"type": "message", "id": "p1", "timestamp": iso(now - timedelta(hours=5)), "message": {"role": "assistant",
+            "provider": "openai", "model": "gpt-6.1-sol", "usage": {"input": 3000, "output": 400, "cacheRead": 20000, "cacheWrite": 0}}}) + "\n")
+
+# opencode: subscription turns (cost 0), including a -fast model.
+os.makedirs(f"{out}/data/opencode", exist_ok=True)
+db = sqlite3.connect(f"{out}/data/opencode/opencode.db"); db.execute("PRAGMA journal_mode=WAL")
+db.execute("CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+for i in range(30):
+    t = int((now - timedelta(minutes=random.randint(0, 20 * 60))).timestamp() * 1000)
+    data = {"time": {"created": t}, "model": {"id": "gpt-6.1-sol-fast" if i % 5 == 0 else "gpt-6.1-sol", "providerID": "openai"},
+            "cost": 0, "tokens": {"input": random.randint(500, 4000), "output": random.randint(100, 900), "reasoning": 50,
+                                  "cache": {"read": random.randint(10000, 60000), "write": 0}}}
+    db.execute("INSERT INTO session_message VALUES (?,?,?,?,?,?)", (f"msg{i}", f"ses{i % 3}", "assistant", t, t, json.dumps(data)))
+db.commit(); db.close()
 PY
 PORT=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 python3 -I -m http.server "$PORT" --bind 127.0.0.1 --directory "$FAKE/srv" > "$OUT/usage-server.log" 2>&1 &
@@ -57,9 +92,11 @@ for _ in $(seq 40); do
     python3 -I -c "import socket; socket.create_connection(('127.0.0.1', $PORT), 0.2)" 2>/dev/null && break
     sleep 0.1
 done
-export CLAUDE_CONFIG_DIR=$FAKE AGENT_BAR_USAGE_URL=http://127.0.0.1:$PORT/usage
+export CLAUDE_CONFIG_DIR=$FAKE AGENT_BAR_USAGE_URL=http://127.0.0.1:$PORT/usage \
+    AGENT_BAR_CHATGPT_USAGE_URL=http://127.0.0.1:$PORT/wham
+daemon() { HOME=$OUT/home CODEX_HOME=$OUT/home/.codex PI_CODING_AGENT_DIR=$OUT/home/.pi/agent "$DAEMON"; }
 
-"$DAEMON" > "$OUT/daemon.log" 2>&1 &
+daemon > "$OUT/daemon.log" 2>&1 &
 gnome-shell --headless --wayland --no-x11 --wayland-display=wayland-agentbar-test \
     --virtual-monitor 1600x900 > "$OUT/shell.log" 2>&1 &
 SHELL_PID=$!
@@ -73,6 +110,8 @@ ev() { gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shel
 shot() { gdbus call --session --dest org.gnome.Shell.Screenshot --object-path /org/gnome/Shell/Screenshot \
     --method org.gnome.Shell.Screenshot.Screenshot false false "$OUT/$1.png" >/dev/null && echo "screenshot: $OUT/$1.png"; }
 IND="Main.panel.statusArea['$UUID']"
+# Every label text in the open menu, joined.
+MENU_TEXT="(function walk(a) { return [a.text ?? '', ...a.get_children().map(walk)].join(' '); })($IND.menu.box)"
 
 gnome-extensions enable unsafe@test
 gnome-extensions enable $UUID
@@ -82,11 +121,12 @@ gnome-extensions info $UUID | grep State
 ev "Main.layoutManager.modalDialogGroup.get_children().forEach(d => d.close?.()); Main.overview.hide()" >/dev/null
 ev "Main.messageTray.getSources().forEach(s => s.destroy())" >/dev/null
 for _ in $(seq 30); do  # wait for the daemon's first snapshot
-    [[ "$(ev "$IND._label.text")" == *%* ]] && break
+    [[ "$(ev "$IND.panelSummary")" == *openai*%* ]] && break
     sleep 0.5
 done
-echo "panel: $(ev "$IND._label.text")"
-echo "glyph: $(ev "[$IND._logo.visible ? 'logo' : 'ring', $IND._logo.get_style_class_name()].join(' ')")"
+PANEL=$(ev "$IND.panelSummary"); echo "panel: $PANEL"
+# Both accounts; the countdown only on ChatGPT (36% left vs Claude's 74%).
+[[ "$PANEL" == *claude*%\ \|* && "$PANEL" == *openai*%\ ·\ * ]] || { echo "FAIL: panel should show both accounts, countdown on ChatGPT"; exit 1; }
 shot panel
 ev "$IND.menu.open(false)" >/dev/null; sleep 1; shot menu-1d
 # Chart hover: stage x of the 22nd bar maps to slot 21, and hovering it captions that hour.
@@ -97,16 +137,30 @@ echo "chart hover caption: $(ev "const ch = $FIND_CHART; ch._hover = 21; ch._onH
 sleep 0.5; shot chart-hover
 echo "chart caption after leave: $(ev "const ch = $FIND_CHART; ch._hover = -1; ch._onHover(-1); ch.queue_repaint(); $CAPTION")"
 ev "$IND._settings.set_string('stats-range','7d')" >/dev/null; sleep 1; shot menu-7d
+# ChatGPT tab: usage from Codex, pi and opencode, so a By tool section.
+ev "$IND._settings.set_string('menu-account','openai')" >/dev/null; sleep 1; shot menu-chatgpt
+MENU=$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "$MENU_TEXT")
+for want in 'ChatGPT · Plus' 'By tool' opencode Codex pi '6.1-sol-fast' 'Claude  74%' 'ChatGPT  36%'; do
+    [[ "$MENU" == *"$want"* ]] || { echo "FAIL: ChatGPT tab lacks '$want'"; exit 1; }
+done
+echo "chatgpt tab: ok"
+ev "$IND._settings.set_strv('hidden-accounts',['claude'])" >/dev/null; sleep 1
+echo "panel (claude hidden): $(ev "$IND.panelSummary")"
+ev "$IND._settings.set_strv('hidden-accounts',[])" >/dev/null
+ev "$IND._settings.set_string('menu-account','claude')" >/dev/null
 ev "$IND.menu.close(false)" >/dev/null
 
 # Low-quota snapshot -> one notification from the "Agent Bar" source.
 EXT="Main.extensionManager.lookup('$UUID').stateObj"
-LOW='{"version":1,"providers":[{"id":"claude","name":"Claude","status":"ok","limits":[{"id":"session","label":"5-hour","used_pct":96,"resets_at":"2099-01-01T00:00:00Z"}],"stats":{}}]}'
+LOW='{"version":1,"providers":[{"id":"claude","name":"Claude","status":"ok","limit_reached":true,"limits":[{"id":"session","label":"5-hour","used_pct":96,"resets_at":"2099-01-01T00:00:00Z"}],"stats":{}}]}'
 ev "$EXT._onSnapshot('$LOW')" >/dev/null
 ev "$EXT._onSnapshot('$LOW')" >/dev/null
 echo "notifications: $(ev "JSON.stringify(Main.messageTray.getSources().filter(s => s.title === 'Agent Bar').flatMap(s => s.notifications.map(n => n.title)))")"
-echo "panel (low): $(ev "$IND._label.text") / $(ev "$IND._logo.visible ? $IND._logo.get_style_class_name() : $IND._ring.get_style_class_name()")"
+echo "panel (low): $(ev "$IND.panelSummary")"
+ev "$IND.menu.open(false)" >/dev/null; sleep 1
+[[ "$(ev "$MENU_TEXT")" == *"limit reached"* ]] || { echo "FAIL: no limit reached badge"; exit 1; }
 shot low
+ev "$IND.menu.close(false)" >/dev/null
 
 # A long error must wrap, not widen the menu.
 ev "$IND.menu.open(false)" >/dev/null; sleep 1
@@ -125,13 +179,13 @@ echo "prefs window: $(ev "global.get_window_actors().map(a => a.meta_window.get_
 shot prefs
 
 pkill -f "$DAEMON"; sleep 1
-echo "panel (daemon down): $(ev "$IND._label.text")"
+echo "panel (daemon down): $(ev "$IND.panelSummary")"
 ev "$IND.menu.open(false)" >/dev/null; sleep 1; shot daemon-down
 ev "$IND.menu.close(false)" >/dev/null
 
-"$DAEMON" >> "$OUT/daemon.log" 2>&1 &
+daemon >> "$OUT/daemon.log" 2>&1 &
 sleep 3
-echo "panel (daemon back): $(ev "$IND._label.text")"
+echo "panel (daemon back): $(ev "$IND.panelSummary")"
 gnome-extensions disable $UUID; sleep 1; gnome-extensions enable $UUID; sleep 2
 gnome-extensions info $UUID | grep State
 # Shutdown with the daemon gone exercises late D-Bus callbacks on a destroyed indicator.

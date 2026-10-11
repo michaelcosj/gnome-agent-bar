@@ -15,6 +15,18 @@ const L = [{id: 'session', used_pct: 11}, {id: 'weekly_all', used_pct: 25}];
 eq(f.pickLimit(L, 'auto').id, 'weekly_all'); eq(f.pickLimit(L, 'session').id, 'session'); eq(f.pickLimit(L, 'nope').id, 'weekly_all'); eq(f.pickLimit([], 'auto'), null);
 eq(f.ago(new Date(Date.now() - 5000).toISOString()), 'just now'); eq(f.ago(new Date(Date.now() - 125*60e3).toISOString()), '2h05m ago');
 eq(f.shortModel('claude-opus-5-5'), 'opus-5-5');
+// ChatGPT windows map onto the same panel-limit choices.
+const G = [{id: 'primary', used_pct: 40}, {id: 'secondary', used_pct: 10}];
+eq(f.pickLimit(G, 'session').id, 'primary'); eq(f.pickLimit(G, 'weekly_all').id, 'secondary');
+// Top bar: every shown account with limits; the closest one is marked.
+const C = {id: 'claude', limits: L}, O = {id: 'openai', limits: G}, U = {id: 'x', limits: []};
+let pe = f.panelEntries([C, O, U]);
+eq(pe.map(e => `${e.provider.id}:${e.closest}`).join(), 'claude:false,openai:true');
+eq(f.panelEntries([C, O], {mode: 'closest'}).map(e => e.provider.id).join(), 'openai');
+eq(f.panelEntries([C, O], {hidden: ['openai']}).map(e => `${e.provider.id}:${e.closest}`).join(), 'claude:true');
+eq(f.panelEntries([{...C, limit_reached: true}, O]).find(e => e.closest).provider.id, 'claude');
+eq(f.panelEntries([U]).length, 0);
+eq(f.selectedAccount([C, O], 'openai').id, 'openai'); eq(f.selectedAccount([C, O], 'gone').id, 'claude'); eq(f.selectedAccount([], ''), null);
 eq(f.remaining({used_pct: 25}), 75); eq(f.remaining({used_pct: 104}), 0); eq(f.shown({used_pct: 25}, true).text, '75% left'); eq(f.shown({used_pct: 25}, false).text, '25% used');
 
 // Alerts: one per window at the most severe level crossed; resets_at jitter ignored.

@@ -4,7 +4,7 @@
     <key name="panel-limit" type="s">
       <default>'auto'</default>
       <summary>Limit shown in the top bar</summary>
-      <description>A limit id such as "session" or "weekly_all", or "auto" for the most used one.</description>
+      <description>"session" (short window, e.g. 5-hour), "weekly_all" (weekly), or "auto" for the most used one. Applies to every account.</description>
     </key>
     <key name="panel-icon" type="s">
       <choices>
@@ -27,9 +27,30 @@
       <default>true</default>
       <summary>Show what is left instead of what is used</summary>
     </key>
-    <key name="show-countdown" type="b">
-      <default>true</default>
-      <summary>Show time until reset next to the percentage</summary>
+    <key name="panel-countdown" type="s">
+      <choices>
+        <choice value="closest"/>
+        <choice value="all"/>
+        <choice value="none"/>
+      </choices>
+      <default>'closest'</default>
+      <summary>Time until reset in the top bar: on the account closest to its limit, on every account, or off</summary>
+    </key>
+    <key name="panel-accounts" type="s">
+      <choices>
+        <choice value="all"/>
+        <choice value="closest"/>
+      </choices>
+      <default>'all'</default>
+      <summary>Accounts in the top bar: all, or only the one closest to its limit</summary>
+    </key>
+    <key name="hidden-accounts" type="as">
+      <default>[]</default>
+      <summary>Account ids ("claude", "openai") hidden from the top bar, menu and notifications</summary>
+    </key>
+    <key name="menu-account" type="s">
+      <default>''</default>
+      <summary>Account tab last opened in the menu</summary>
     </key>
     <key name="notify-enabled" type="b">
       <default>true</default>

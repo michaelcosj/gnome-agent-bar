@@ -7,6 +7,9 @@
 .agent-bar-ring.warning { color: #f8e45c; }
 .agent-bar-ring.critical { color: #ff7b63; }
 .agent-bar-logo { margin-right: 6px; }
+/* Space between accounts: each label is followed by the next account's glyph. */
+.agent-bar-panel .agent-bar-label { margin-right: 10px; }
+.agent-bar-panel .agent-bar-label:last-child { margin-right: 0; }
 .agent-bar-logo.warning { color: #f8e45c; }
 .agent-bar-logo.critical { color: #ff7b63; }
 .agent-bar-label { font-feature-settings: "tnum"; }
@@ -19,6 +22,7 @@
     border-radius: 6px;
     background-color: rgba(229, 165, 10, 0.25);
 }
+.agent-bar-badge.critical { background-color: rgba(224, 27, 36, 0.3); }
 .agent-bar-limit { padding-top: 6px; padding-bottom: 6px; }
 .agent-bar-bar {
     height: 6px;
@@ -50,6 +54,17 @@
     min-width: 240px;
     margin: 4px 0 2px;
     color: -st-accent-color;
+}
+
+.agent-bar-tabs { spacing: 4px; }
+.agent-bar-tab {
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-feature-settings: "tnum";
+}
+.agent-bar-tab:checked {
+    background-color: -st-accent-color;
+    color: -st-accent-fg-color;
 }
 
 .agent-bar-ranges { spacing: 4px; }
