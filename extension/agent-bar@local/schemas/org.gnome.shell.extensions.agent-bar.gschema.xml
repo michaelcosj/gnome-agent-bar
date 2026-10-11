@@ -23,5 +23,19 @@
       <default>true</default>
       <summary>Show time until reset next to the percentage</summary>
     </key>
+    <key name="notify-enabled" type="b">
+      <default>true</default>
+      <summary>Notify when a limit is running low</summary>
+    </key>
+    <key name="notify-warn-left" type="i">
+      <range min="0" max="100"/>
+      <default>20</default>
+      <summary>Warn when this percentage or less is left</summary>
+    </key>
+    <key name="notify-critical-left" type="i">
+      <range min="0" max="100"/>
+      <default>5</default>
+      <summary>Urgent notification when this percentage or less is left</summary>
+    </key>
   </schema>
 </schemalist>

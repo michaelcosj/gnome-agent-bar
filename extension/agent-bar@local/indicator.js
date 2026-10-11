@@ -79,6 +79,7 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._snapshot = null;
         this._daemonUp = false;
         this._onRefresh = null;
+        this._onPrefs = null;
         this._renderId = 0;
 
         const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
@@ -96,6 +97,7 @@ class AgentBarIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._content);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._refreshItem = this.menu.addAction('Refresh', () => this._onRefresh?.());
+        this.menu.addAction('Settings', () => this._onPrefs?.());
         this._footer = new PopupMenu.PopupMenuItem('', {reactive: false, style_class: 'agent-bar-footer'});
         this._footer.label.opacity = DIM_OPACITY;
         this.menu.addMenuItem(this._footer);
@@ -119,18 +121,17 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._onRefresh = fn;
     }
 
+    setPrefsHandler(fn) {
+        this._onPrefs = fn;
+    }
+
     setDaemonUp(up) {
         this._daemonUp = up;
         this._render();
     }
 
-    setSnapshot(json) {
-        try {
-            this._snapshot = JSON.parse(json);
-        } catch (e) {
-            console.warn(`agent-bar: bad snapshot: ${e.message}`);
-            return;
-        }
+    setSnapshot(snapshot) {
+        this._snapshot = snapshot;
         this._render();
     }
 
@@ -299,6 +300,7 @@ class AgentBarIndicator extends PanelMenu.Button {
         this._settingsIds = [];
         this._settings = null;
         this._onRefresh = null;
+        this._onPrefs = null;
         super._onDestroy();
     }
 });

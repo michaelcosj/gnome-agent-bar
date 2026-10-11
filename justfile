@@ -13,6 +13,7 @@ build:
 # Rust tests + headless GNOME Shell smoke test
 test:
     cd daemon && {{cargo}} test
+    gjs -m extension/tests/unit.js
     cd daemon && {{cargo}} build
     scripts/headless-test.sh
 
@@ -35,7 +36,7 @@ run-daemon:
 
 # Zip for extensions.gnome.org
 pack:
-    gnome-extensions pack --force --extra-source=format.js --extra-source=indicator.js --out-dir=target {{ext_src}}
+    gnome-extensions pack --force --extra-source=format.js --extra-source=indicator.js --extra-source=alerts.js --extra-source=notifier.js --out-dir=target {{ext_src}}
 
 clean:
     rm -rf target {{ext_src}}/schemas/gschemas.compiled

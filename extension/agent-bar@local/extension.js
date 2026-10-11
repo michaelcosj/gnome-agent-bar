@@ -4,6 +4,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {Indicator} from './indicator.js';
+import {Notifier} from './notifier.js';
 
 // Must match daemon/src/dbus.rs.
 const BUS_NAME = 'dev.agentbar.Usage';
@@ -19,8 +20,11 @@ const UsageProxy = Gio.DBusProxy.makeProxyWrapper(`
 
 export default class AgentBarExtension extends Extension {
     enable() {
-        this._indicator = new Indicator(this.getSettings());
+        const settings = this.getSettings();
+        this._indicator = new Indicator(settings);
+        this._indicator.setPrefsHandler(() => this.openPreferences());
         Main.panel.addToStatusArea(this.uuid, this._indicator);
+        this._notifier = new Notifier(settings);
 
         this._cancellable = new Gio.Cancellable();
         // Async: never block the Shell on the bus.
@@ -33,7 +37,7 @@ export default class AgentBarExtension extends Extension {
             if (!this._indicator)
                 return; // disabled meanwhile
             this._proxy = proxy;
-            this._changedId = proxy.connectSignal('Changed', (_p, _sender, [json]) => this._indicator?.setSnapshot(json));
+            this._changedId = proxy.connectSignal('Changed', (_p, _sender, [json]) => this._onSnapshot(json));
             this._ownerId = proxy.connect('notify::g-name-owner', () => this._syncOwner());
             this._indicator.setRefreshHandler(() => {
                 proxy.RefreshAsync().catch(e => console.warn(`agent-bar: Refresh failed: ${e.message}`));
@@ -52,6 +56,22 @@ export default class AgentBarExtension extends Extension {
         }
         this._indicator?.destroy();
         this._indicator = null;
+        this._notifier?.destroy();
+        this._notifier = null;
+    }
+
+    _onSnapshot(json) {
+        if (!this._indicator)
+            return;
+        let snapshot;
+        try {
+            snapshot = JSON.parse(json);
+        } catch (e) {
+            console.warn(`agent-bar: bad snapshot: ${e.message}`);
+            return;
+        }
+        this._indicator.setSnapshot(snapshot);
+        this._notifier.check(snapshot);
     }
 
     // The daemon may start, stop or restart at any time.
@@ -61,7 +81,7 @@ export default class AgentBarExtension extends Extension {
         if (!up)
             return;
         this._proxy.GetSnapshotAsync()
-            .then(([json]) => this._indicator?.setSnapshot(json))
+            .then(([json]) => this._onSnapshot(json))
             .catch(e => console.warn(`agent-bar: GetSnapshot failed: ${e.message}`));
     }
 }
